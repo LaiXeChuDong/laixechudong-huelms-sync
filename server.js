@@ -597,12 +597,25 @@ async function scrapeProgress(page) {
   // ----------------------------------------------------------
   for (const row of readyRows) {
     const cells = row.cells || [];
-    const label = cells[0] || row.text;
+
+    // HueLMS có hàng cha "Pháp luật giao thông đường bộ (3)" với ô expand/collapse
+    // đứng riêng, nên tên môn không phải lúc nào cũng nằm ở cells[0].
+    // Nhận diện bằng toàn bộ text của hàng để không bỏ sót trafficLaw.
+    const label = row.text || cells.join(' ');
     const key = identifyKey(label);
     if (!key) continue;
 
-    // Bảng Lớp học: Tên lớp | Tiến độ | Số giờ | Đạt
-    let percent = cells.length > 1 ? parsePercent(cells[1]) : null;
+    // Không giả định cột Tiến độ luôn là cells[1].
+    // Tìm ô đầu tiên thực sự có dấu %, ví dụ 76.6%.
+    let percent = null;
+    for (const cell of cells) {
+      const candidate = parsePercent(cell);
+      if (candidate !== null) {
+        percent = candidate;
+        break;
+      }
+    }
+
     if (percent === null) percent = parsePercent(row.text);
     if (percent === null) continue;
 
