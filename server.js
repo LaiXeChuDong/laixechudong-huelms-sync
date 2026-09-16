@@ -61,23 +61,25 @@ function norm(value) {
 }
 
 function parsePercent(value) {
-  const text = String(value || '');
+  const text = String(value || '')
+    .replace(/\u00a0/g, ' ')
+    .trim();
 
   const match = text.match(
-    /(\d+(?:[.,]\d+)?)\s*%/
+    /(?:^|[^\d])(\d{1,3}(?:[.,]\d+)?)\s*%/
   );
 
-  if (!match) {
-    return null;
-  }
+  if (!match) return null;
 
   const number = Number(
     match[1].replace(',', '.')
   );
 
-  return Number.isFinite(number)
-    ? number
-    : null;
+  if (!Number.isFinite(number)) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, number));
 }
 
 function assertSecret(value) {
