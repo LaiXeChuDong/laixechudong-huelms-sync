@@ -60,12 +60,26 @@ function norm(value) {
     .trim();
 }
 
-function score(value) {
-  const match = String(value || '')
-    .replace(',', '.')
-    .match(/-?\d+(?:\.\d+)?/);
+function parsePercent(value) {
+  const text = String(value || '');
 
-  return match ? Number(match[0]) : 0;
+  const match = text.match(
+    /(\d+(?:[.,]\d+)?)\s*%/
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const number = Number(
+    match[1].replace(',', '.')
+  );
+
+  if (!Number.isFinite(number)) {
+    return null;
+  }
+
+  return number;
 }
 
 function assertSecret(value) {
@@ -85,11 +99,14 @@ function assertSecret(value) {
 async function firstVisible(page, selectors) {
   for (const selector of selectors) {
     try {
-      const locator = page.locator(selector).first();
+      const locator =
+        page.locator(selector).first();
 
       if (
         await locator.count() > 0 &&
-        await locator.isVisible().catch(() => false)
+        await locator
+          .isVisible()
+          .catch(() => false)
       ) {
         return locator;
       }
@@ -100,11 +117,12 @@ async function firstVisible(page, selectors) {
 }
 
 // ============================================================
-// HUELMS LOGIN
+// LOGIN HUELMS
 // ============================================================
 
 async function login(page, username, password) {
-  const masked = maskUsername(username);
+  const masked =
+    maskUsername(username);
 
   console.log(
     '==================================================='
@@ -123,7 +141,7 @@ async function login(page, username, password) {
     timeout: 60000
   });
 
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(1200);
 
   console.log(
     '[LOGIN] URL ban đầu:',
@@ -132,68 +150,17 @@ async function login(page, username, password) {
 
   console.log(
     '[LOGIN] Title:',
-    await page.title().catch(() => '')
+    await page
+      .title()
+      .catch(() => '')
   );
 
   // ----------------------------------------------------------
-  // 2. TÌM FORM LOGIN Ở TRANG HIỆN TẠI
+  // 2. TÌM FORM LOGIN
   // ----------------------------------------------------------
 
-  let userInput = await firstVisible(page, [
-    'input[placeholder*="Tên đăng nhập" i]',
-    'input[placeholder*="tên đăng nhập" i]',
-    'input[placeholder*="tài khoản" i]',
-    'input[placeholder*="username" i]',
-
-    'input[name="username"]',
-    'input[name="userName"]',
-    'input[name="login"]',
-    'input[name="account"]',
-    'input[name="email"]',
-
-    'input[id*="username" i]',
-    'input[id*="login" i]',
-
-    'input[type="text"]'
-  ]);
-
-  let passInput = await firstVisible(page, [
-    'input[placeholder*="Nhập mật khẩu" i]',
-    'input[placeholder*="mật khẩu" i]',
-
-    'input[name="password"]',
-    'input[name="Password"]',
-
-    'input[id*="password" i]',
-
-    'input[type="password"]'
-  ]);
-
-  // ----------------------------------------------------------
-  // 3. NẾU CHƯA THẤY FORM -> MỞ /user/login
-  // ----------------------------------------------------------
-
-  if (!userInput || !passInput) {
-    console.log(
-      '[LOGIN] Thử mở trực tiếp /user/login'
-    );
-
-    await page.goto(
-      `${BASE_URL}/user/login`,
-      {
-        waitUntil: 'domcontentloaded',
-        timeout: 60000
-      }
-    );
-
-    await page.waitForTimeout(1500);
-
-    console.log(
-      '[LOGIN] URL form:',
-      page.url()
-    );
-
-    userInput = await firstVisible(page, [
+  let userInput =
+    await firstVisible(page, [
       'input[placeholder*="Tên đăng nhập" i]',
       'input[placeholder*="tên đăng nhập" i]',
       'input[placeholder*="tài khoản" i]',
@@ -211,7 +178,8 @@ async function login(page, username, password) {
       'input[type="text"]'
     ]);
 
-    passInput = await firstVisible(page, [
+  let passInput =
+    await firstVisible(page, [
       'input[placeholder*="Nhập mật khẩu" i]',
       'input[placeholder*="mật khẩu" i]',
 
@@ -222,24 +190,82 @@ async function login(page, username, password) {
 
       'input[type="password"]'
     ]);
-  }
 
   // ----------------------------------------------------------
-  // 4. DEBUG NẾU KHÔNG TÌM THẤY FORM
+  // 3. NẾU CHƯA CÓ FORM, MỞ /user/login
   // ----------------------------------------------------------
 
   if (!userInput || !passInput) {
-    const inputs = await page
-      .locator('input')
-      .evaluateAll(elements =>
-        elements.map(el => ({
-          type: el.type || '',
-          name: el.name || '',
-          id: el.id || '',
-          placeholder: el.placeholder || ''
-        }))
-      )
-      .catch(() => []);
+    console.log(
+      '[LOGIN] Thử mở trực tiếp /user/login'
+    );
+
+    await page.goto(
+      `${BASE_URL}/user/login`,
+      {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000
+      }
+    );
+
+    await page.waitForTimeout(1200);
+
+    console.log(
+      '[LOGIN] URL form:',
+      page.url()
+    );
+
+    userInput =
+      await firstVisible(page, [
+        'input[placeholder*="Tên đăng nhập" i]',
+        'input[placeholder*="tên đăng nhập" i]',
+        'input[placeholder*="tài khoản" i]',
+        'input[placeholder*="username" i]',
+
+        'input[name="username"]',
+        'input[name="userName"]',
+        'input[name="login"]',
+        'input[name="account"]',
+        'input[name="email"]',
+
+        'input[id*="username" i]',
+        'input[id*="login" i]',
+
+        'input[type="text"]'
+      ]);
+
+    passInput =
+      await firstVisible(page, [
+        'input[placeholder*="Nhập mật khẩu" i]',
+        'input[placeholder*="mật khẩu" i]',
+
+        'input[name="password"]',
+        'input[name="Password"]',
+
+        'input[id*="password" i]',
+
+        'input[type="password"]'
+      ]);
+  }
+
+  // ----------------------------------------------------------
+  // 4. DEBUG NẾU KHÔNG THẤY FORM
+  // ----------------------------------------------------------
+
+  if (!userInput || !passInput) {
+    const inputs =
+      await page
+        .locator('input')
+        .evaluateAll(elements =>
+          elements.map(el => ({
+            type: el.type || '',
+            name: el.name || '',
+            id: el.id || '',
+            placeholder:
+              el.placeholder || ''
+          }))
+        )
+        .catch(() => []);
 
     console.log(
       '[LOGIN] Inputs tìm được:',
@@ -257,7 +283,7 @@ async function login(page, username, password) {
   );
 
   // ----------------------------------------------------------
-  // 5. NHẬP USER + PASSWORD
+  // 5. NHẬP TÀI KHOẢN
   // ----------------------------------------------------------
 
   await userInput.fill(
@@ -295,9 +321,7 @@ async function login(page, username, password) {
 
   let submitted = false;
 
-  for (
-    const selector of buttonSelectors
-  ) {
+  for (const selector of buttonSelectors) {
     try {
       const locator =
         page.locator(selector).first();
@@ -318,7 +342,6 @@ async function login(page, username, password) {
         });
 
         submitted = true;
-
         break;
       }
     } catch (error) {
@@ -330,12 +353,12 @@ async function login(page, username, password) {
   }
 
   // ----------------------------------------------------------
-  // 7. FALLBACK: TỰ TÌM ELEMENT THEO TEXT
+  // 7. FALLBACK DOM
   // ----------------------------------------------------------
 
   if (!submitted) {
     console.log(
-      '[LOGIN] Thử tìm nút bằng text DOM...'
+      '[LOGIN] Thử click nút bằng text DOM...'
     );
 
     try {
@@ -396,7 +419,7 @@ async function login(page, username, password) {
   }
 
   // ----------------------------------------------------------
-  // 8. FALLBACK CUỐI: NHẤN ENTER
+  // 8. FALLBACK ENTER
   // ----------------------------------------------------------
 
   if (!submitted) {
@@ -416,51 +439,7 @@ async function login(page, username, password) {
     }
   }
 
-  // ----------------------------------------------------------
-  // 9. DEBUG NẾU KHÔNG SUBMIT ĐƯỢC
-  // ----------------------------------------------------------
-
   if (!submitted) {
-    const buttons =
-      await page
-        .locator(
-          [
-            'button',
-            'input[type="submit"]',
-            '[role="button"]',
-            'a'
-          ].join(',')
-        )
-        .evaluateAll(elements =>
-          elements.map(el => ({
-            tag: el.tagName,
-            text:
-              (
-                el.innerText ||
-                el.value ||
-                el.textContent ||
-                ''
-              )
-                .replace(/\s+/g, ' ')
-                .trim(),
-
-            type: el.type || '',
-            id: el.id || '',
-
-            className:
-              typeof el.className ===
-                'string'
-                ? el.className
-                : ''
-          }))
-        )
-        .catch(() => []);
-
-    console.log(
-      '[LOGIN] Các phần tử click:',
-      JSON.stringify(buttons)
-    );
-
     throw new Error(
       'Không thể gửi form đăng nhập HueLMS.'
     );
@@ -471,41 +450,82 @@ async function login(page, username, password) {
   );
 
   // ----------------------------------------------------------
-  // 10. CHỜ CHUYỂN TRANG
+  // 9. CHỜ RỜI TRANG LOGIN
   // ----------------------------------------------------------
 
-  await Promise.race([
-    page
-      .waitForURL(
-        url =>
-          !url
-            .toString()
-            .includes('/user/login'),
-        {
-          timeout: 15000
-        }
-      )
-      .catch(() => null),
+  try {
+    await page.waitForURL(
+      url =>
+        !url
+          .toString()
+          .includes('/user/login'),
+      {
+        timeout: 20000
+      }
+    );
+  } catch (_) { }
 
-    page.waitForTimeout(5000)
-  ]);
-
-  await page.waitForTimeout(1500);
+  await page
+    .waitForLoadState(
+      'domcontentloaded'
+    )
+    .catch(() => { });
 
   console.log(
-    '[LOGIN] URL sau đăng nhập:',
+    '[LOGIN] URL sau bước đăng nhập:',
+    page.url()
+  );
+
+  // ----------------------------------------------------------
+  // 10. HUELMS:
+  // /student/ep -> /student/ep/{ID}
+  // ----------------------------------------------------------
+
+  if (
+    /\/student\/ep\/?$/.test(
+      page.url()
+    )
+  ) {
+    console.log(
+      '[LOGIN] Đang ở /student/ep, chờ redirect tới ID học viên...'
+    );
+
+    try {
+      await page.waitForURL(
+        url =>
+          /\/student\/ep\/\d+\/?$/.test(
+            url.toString()
+          ),
+        {
+          timeout: 20000
+        }
+      );
+
+      console.log(
+        '[LOGIN] Redirect chi tiết thành công:',
+        page.url()
+      );
+    } catch (_) {
+      console.log(
+        '[LOGIN] Redirect chi tiết chưa hoàn tất.'
+      );
+    }
+  }
+
+  console.log(
+    '[LOGIN] URL cuối:',
     page.url()
   );
 
   console.log(
-    '[LOGIN] Title sau đăng nhập:',
+    '[LOGIN] Title:',
     await page
       .title()
       .catch(() => '')
   );
 
   // ----------------------------------------------------------
-  // 11. KIỂM TRA LOGIN CÓ THÀNH CÔNG KHÔNG
+  // 11. KIỂM TRA LOGIN
   // ----------------------------------------------------------
 
   const visiblePassword =
@@ -546,7 +566,7 @@ async function login(page, username, password) {
     }
 
     throw new Error(
-      'HueLMS vẫn ở trang đăng nhập sau khi gửi tài khoản. URL: ' +
+      'HueLMS vẫn ở trang đăng nhập. URL: ' +
       page.url()
     );
   }
@@ -562,7 +582,7 @@ async function login(page, username, password) {
 
 async function openProgressPage(page) {
   console.log(
-    '[PROGRESS] Tìm trang tiến độ...'
+    '[PROGRESS] Chờ HueLMS chuyển sang trang chi tiết...'
   );
 
   console.log(
@@ -571,270 +591,154 @@ async function openProgressPage(page) {
   );
 
   // ----------------------------------------------------------
-  // 1. ĐANG Ở /student/ep/
+  // 1. ĐÃ Ở ĐÚNG URL
   // ----------------------------------------------------------
 
   if (
-    page
-      .url()
-      .includes('/student/ep/')
+    /\/student\/ep\/\d+\/?$/.test(
+      page.url()
+    )
   ) {
     console.log(
-      '[PROGRESS] Đã ở student/ep.'
+      '[PROGRESS] Đã ở đúng trang chi tiết:',
+      page.url()
     );
 
     return;
   }
 
   // ----------------------------------------------------------
-  // 2. ĐÃ THẤY BẢNG ĐIỂM
+  // 2. NẾU Ở /student/ep, CHỜ REDIRECT
   // ----------------------------------------------------------
 
-  const hasGradeTitle =
-    (await page
-      .locator(
-        'text=Bảng điểm khoá học'
-      )
-      .count()) > 0 ||
-    (await page
-      .locator(
-        'text=Bảng điểm khóa học'
-      )
-      .count()) > 0;
-
-  if (hasGradeTitle) {
-    console.log(
-      '[PROGRESS] Đã thấy Bảng điểm khóa học.'
-    );
-
-    return;
-  }
-
-  // ----------------------------------------------------------
-  // 3. TÌM LINK /student/ep/
-  // ----------------------------------------------------------
-
-  let direct =
-    page
-      .locator(
-        'a[href*="/student/ep/"]'
-      )
-      .first();
-
-  if (await direct.count()) {
-    const href =
-      await direct
-        .getAttribute('href')
-        .catch(() => '');
-
-    console.log(
-      '[PROGRESS] Tìm thấy link:',
-      href
-    );
-
-    await direct.click();
-
-    await page
-      .waitForLoadState(
-        'domcontentloaded'
-      )
-      .catch(() => { });
-
-    await page.waitForTimeout(1200);
-
-    return;
-  }
-
-  // ----------------------------------------------------------
-  // 4. THỬ CÁC MENU LIÊN QUAN
-  // ----------------------------------------------------------
-
-  const candidates = [
-    'a:has-text("Chương trình đào tạo")',
-
-    'a:has-text("Khóa học")',
-
-    'a:has-text("Khoá học")',
-
-    'a:has-text("Tiến độ")',
-
-    'a:has-text("Kết quả")',
-
-    'a:has-text("Bảng điểm")',
-
-    'button:has-text("Chi tiết")'
-  ];
-
-  for (
-    const selector of candidates
+  if (
+    /\/student\/ep\/?$/.test(
+      page.url()
+    )
   ) {
-    const loc =
-      page
-        .locator(selector)
-        .first();
+    console.log(
+      '[PROGRESS] Đang ở /student/ep, chờ redirect...'
+    );
 
-    if (
-      await loc.count()
-    ) {
-      try {
-        console.log(
-          '[PROGRESS] Thử click:',
-          selector
-        );
+    try {
+      await page.waitForURL(
+        url =>
+          /\/student\/ep\/\d+\/?$/.test(
+            url.toString()
+          ),
+        {
+          timeout: 20000
+        }
+      );
 
-        await loc.click();
+      console.log(
+        '[PROGRESS] Redirect thành công:',
+        page.url()
+      );
 
-        await page.waitForTimeout(
-          1200
-        );
-      } catch (_) { }
+      await page
+        .waitForLoadState(
+          'domcontentloaded'
+        )
+        .catch(() => { });
 
-      direct =
-        page
-          .locator(
-            'a[href*="/student/ep/"]'
-          )
-          .first();
+      await page.waitForTimeout(
+        1000
+      );
 
-      if (
-        await direct.count()
-      ) {
-        console.log(
-          '[PROGRESS] Tìm thấy student/ep sau click.'
-        );
-
-        await direct.click();
-
-        await page
-          .waitForLoadState(
-            'domcontentloaded'
-          )
-          .catch(() => { });
-
-        await page.waitForTimeout(
-          1200
-        );
-
-        return;
-      }
-
-      const hasGrade =
-        (await page
-          .locator(
-            'text=Bảng điểm khoá học'
-          )
-          .count()) > 0 ||
-        (await page
-          .locator(
-            'text=Bảng điểm khóa học'
-          )
-          .count()) > 0;
-
-      if (hasGrade) {
-        return;
-      }
+      return;
+    } catch (_) {
+      console.log(
+        '[PROGRESS] Chưa redirect sau 20 giây.'
+      );
     }
   }
 
   // ----------------------------------------------------------
-  // 5. DEBUG LINK
+  // 3. CHỜ THÊM JS
   // ----------------------------------------------------------
 
-  const links =
-    await page
-      .locator('a[href]')
-      .evaluateAll(elements =>
-        elements
-          .map(el => ({
-            text:
-              (
-                el.innerText ||
-                el.textContent ||
-                ''
-              )
-                .replace(/\s+/g, ' ')
-                .trim(),
-
-            href:
-              el.href || ''
-          }))
-          .filter(
-            item =>
-              item.text ||
-              item.href
-          )
-      )
-      .catch(() => []);
-
-  const interestingLinks =
-    links.filter(item => {
-      const t =
-        norm(item.text);
-
-      const h =
-        String(
-          item.href || ''
-        ).toLowerCase();
-
-      return (
-        h.includes('/student/') ||
-        t.includes('khoa hoc') ||
-        t.includes(
-          'chuong trinh'
-        ) ||
-        t.includes('tien do') ||
-        t.includes('bang diem')
-      );
-    });
-
-  console.log(
-    '[PROGRESS] Link ứng viên:',
-    JSON.stringify(
-      interestingLinks.slice(
-        0,
-        30
-      )
-    )
+  await page.waitForTimeout(
+    4000
   );
 
+  if (
+    /\/student\/ep\/\d+\/?$/.test(
+      page.url()
+    )
+  ) {
+    console.log(
+      '[PROGRESS] Redirect chậm nhưng thành công:',
+      page.url()
+    );
+
+    return;
+  }
+
   throw new Error(
-    'Không tìm thấy trang Bảng điểm khóa học. URL hiện tại: ' +
+    'HueLMS đăng nhập thành công nhưng không chuyển được sang trang chi tiết tiến độ. URL hiện tại: ' +
     page.url()
   );
 }
 
 // ============================================================
-// SCRAPE SCORES
+// SCRAPE PROGRESS
 // ============================================================
 
-async function scrapeScores(page) {
+async function scrapeProgress(page) {
   console.log(
-    '[SCRAPE] Đọc bảng điểm...'
+    '[SCRAPE] Đọc tiến độ HueLMS...'
   );
 
-  const rows =
+  console.log(
+    '[SCRAPE] URL:',
+    page.url()
+  );
+
+  await page.waitForTimeout(
+    1000
+  );
+
+  // ----------------------------------------------------------
+  // ĐỌC TẤT CẢ TABLE
+  // ----------------------------------------------------------
+
+  const tables =
     await page
-      .locator('table tr')
-      .evaluateAll(trs =>
-        trs.map(tr =>
+      .locator('table')
+      .evaluateAll(tables =>
+        tables.map(table =>
           Array.from(
-            tr.querySelectorAll(
-              'th,td'
+            table.querySelectorAll(
+              'tr'
             )
+          ).map(tr =>
+            Array.from(
+              tr.querySelectorAll(
+                'th,td'
+              )
+            )
+              .map(td =>
+                (
+                  td.innerText ||
+                  td.textContent ||
+                  ''
+                )
+                  .replace(
+                    /\s+/g,
+                    ' '
+                  )
+                  .trim()
+              )
+              .filter(Boolean)
           )
-            .map(td =>
-              (
-                td.innerText ||
-                ''
-              ).trim()
-            )
-            .filter(Boolean)
         )
-      );
+      )
+      .catch(() => []);
 
   console.log(
-    '[SCRAPE] Tổng số dòng:',
-    rows.length
+    '[SCRAPE] Số bảng:',
+    tables.length
   );
 
   const scores = {
@@ -855,143 +759,296 @@ async function scrapeScores(page) {
     simulation: 0
   };
 
-  for (
-    const cells of rows
+  const passed = {
+    ethics: false,
+
+    drivingTechnique: false,
+
+    vehicleStructure: false,
+
+    trafficLaw: false,
+
+    pl1: false,
+
+    pl2: false,
+
+    pl3: false,
+
+    simulation: false
+  };
+
+  // ----------------------------------------------------------
+  // HÀM GHI NHẬN
+  // ----------------------------------------------------------
+
+  function assignProgress(
+    rowText,
+    percent,
+    isPassed
   ) {
-    if (!cells.length) {
-      continue;
-    }
-
-    const label =
-      norm(cells[0]);
-
-    const value =
-      score(
-        cells[
-        cells.length - 1
-        ]
-      );
-
     if (
-      label.includes(
+      rowText.includes(
+        'dao duc nguoi lai xe'
+      ) ||
+      rowText.includes(
         'dao duc'
-      ) &&
-      (
-        label.includes(
-          'vhgt'
-        ) ||
-        label.includes(
-          'pccc'
-        )
+      ) ||
+      rowText.includes(
+        'vhgt'
+      ) ||
+      rowText.includes(
+        'pccc'
       )
     ) {
       scores.ethics =
-        value;
+        percent;
+
+      passed.ethics =
+        isPassed;
+
+      return;
     }
 
-    else if (
-      label.includes(
+    if (
+      rowText.includes(
         'ky thuat lai xe'
       )
     ) {
       scores.drivingTechnique =
-        value;
+        percent;
+
+      passed.drivingTechnique =
+        isPassed;
+
+      return;
     }
 
-    else if (
-      label.includes(
-        'cau tao'
-      ) &&
-      label.includes(
-        'sua chua'
+    if (
+      rowText.includes(
+        'cau tao sua chua'
+      ) ||
+      (
+        rowText.includes(
+          'cau tao'
+        ) &&
+        rowText.includes(
+          'sua chua'
+        )
       )
     ) {
       scores.vehicleStructure =
-        value;
+        percent;
+
+      passed.vehicleStructure =
+        isPassed;
+
+      return;
     }
 
-    else if (
-      label.includes(
+    if (
+      rowText.includes(
+        'phap luat giao thong duong bo'
+      ) ||
+      rowText.includes(
         'phap luat gtdb'
       )
     ) {
       scores.trafficLaw =
-        value;
+        percent;
+
+      passed.trafficLaw =
+        isPassed;
+
+      return;
     }
 
-    else if (
-      label.startsWith(
+    if (
+      rowText.includes(
+        'phan 1'
+      ) ||
+      rowText.includes(
         'pl1'
       )
     ) {
       scores.pl1 =
-        value;
+        percent;
+
+      passed.pl1 =
+        isPassed;
+
+      return;
     }
 
-    else if (
-      label.startsWith(
+    if (
+      rowText.includes(
+        'phan 2'
+      ) ||
+      rowText.includes(
         'pl2'
       )
     ) {
       scores.pl2 =
-        value;
+        percent;
+
+      passed.pl2 =
+        isPassed;
+
+      return;
     }
 
-    else if (
-      label.startsWith(
+    if (
+      rowText.includes(
+        'phan 3'
+      ) ||
+      rowText.includes(
         'pl3'
       )
     ) {
       scores.pl3 =
-        value;
+        percent;
+
+      passed.pl3 =
+        isPassed;
+
+      return;
     }
 
-    else if (
-      label.includes(
+    if (
+      rowText.includes(
+        'mo phong cac tinh huong giao thong'
+      ) ||
+      rowText.includes(
         'mo phong'
       )
     ) {
       scores.simulation =
-        value;
+        percent;
+
+      passed.simulation =
+        isPassed;
     }
   }
 
-  console.log(
-    '[SCRAPE] Kết quả:',
-    JSON.stringify(scores)
-  );
+  // ----------------------------------------------------------
+  // DUYỆT BẢNG
+  // ----------------------------------------------------------
 
-  return scores;
-}
+  for (const table of tables) {
+    for (const cells of table) {
+      if (!cells.length) {
+        continue;
+      }
 
-// ============================================================
-// DERIVE STATUS
-// ============================================================
+      const fullText =
+        cells.join(' ');
 
-function deriveStatus(scores) {
-  const values =
-    Object.values(scores);
+      const rowText =
+        norm(fullText);
 
-  if (
-    values.length &&
-    values.every(
-      value =>
-        Number(value) >= 100
-    )
-  ) {
-    return 'Hoàn thành';
+      const percent =
+        parsePercent(fullText);
+
+      /*
+       * Chỉ dùng bảng có %
+       * để tránh lấy nhầm "Bảng điểm khóa học".
+       */
+      if (percent === null) {
+        continue;
+      }
+
+      const isPassed =
+        rowText.includes(
+          ' dat'
+        ) ||
+        rowText.endsWith(
+          'dat'
+        );
+
+      assignProgress(
+        rowText,
+        percent,
+        isPassed
+      );
+    }
   }
 
-  if (
-    values.some(
+  // ----------------------------------------------------------
+  // XÁC ĐỊNH TRẠNG THÁI
+  // ----------------------------------------------------------
+
+  const progressValues = [
+    scores.ethics,
+
+    scores.drivingTechnique,
+
+    scores.vehicleStructure,
+
+    scores.trafficLaw,
+
+    scores.simulation
+  ];
+
+  const anyProgress =
+    progressValues.some(
       value =>
         Number(value) > 0
-    )
-  ) {
-    return 'Đang học';
+    );
+
+  /*
+   * Không ép tất cả phải 100%.
+   * Ưu tiên trạng thái "Đạt" mà HueLMS hiển thị.
+   *
+   * 5 nhóm chính:
+   * - Đạo đức
+   * - Kỹ thuật
+   * - Cấu tạo
+   * - Pháp luật
+   * - Mô phỏng
+   */
+  const mainPassed = [
+    passed.ethics,
+    passed.drivingTechnique,
+    passed.vehicleStructure,
+    passed.trafficLaw,
+    passed.simulation
+  ];
+
+  const completed =
+    mainPassed.every(Boolean);
+
+  let status =
+    'Chưa học';
+
+  if (completed) {
+    status =
+      'Hoàn thành';
+  } else if (anyProgress) {
+    status =
+      'Đang học';
   }
 
-  return 'Chưa học';
+  const result = {
+    scores,
+
+    passed,
+
+    status,
+
+    completed,
+
+    sourceUrl:
+      page.url(),
+
+    syncedAt:
+      new Date().toISOString()
+  };
+
+  console.log(
+    '[SCRAPE] Kết quả:',
+    JSON.stringify(result)
+  );
+
+  return result;
 }
 
 // ============================================================
@@ -1057,38 +1114,42 @@ async function syncStudent(
       page
     );
 
-    const scores =
-      await scrapeScores(
+    const progress =
+      await scrapeProgress(
         page
       );
 
-    const status =
-      deriveStatus(
-        scores
-      );
-
     console.log(
-      `[SYNC] Thành công ${masked}: ${status}`
+      `[SYNC] Thành công ${masked}: ${progress.status}`
     );
 
     return {
       ...student,
 
-      scores,
+      scores:
+        progress.scores,
 
-      status,
+      passed:
+        progress.passed,
 
-      error: '',
+      status:
+        progress.status,
+
+      completed:
+        progress.completed,
 
       sourceUrl:
-        page.url(),
+        progress.sourceUrl,
 
       syncedAt:
-        new Date().toISOString()
+        progress.syncedAt,
+
+      error: ''
     };
   } catch (error) {
     console.error(
       `[SYNC] Lỗi ${masked}:`,
+      error.stack ||
       error.message
     );
 
@@ -1097,8 +1158,13 @@ async function syncStudent(
 
       scores: {},
 
+      passed: {},
+
       status:
         'Lỗi đồng bộ',
+
+      completed:
+        false,
 
       error:
         error &&
@@ -1136,7 +1202,6 @@ async function callback(
 
   body.set(
     'data',
-
     JSON.stringify({
       action:
         'theory.workerCallback',
@@ -1186,7 +1251,7 @@ async function callback(
 }
 
 // ============================================================
-// RUN BACKGROUND JOB
+// RUN JOB
 // ============================================================
 
 async function runJob(job) {
@@ -1321,6 +1386,7 @@ app.get(
   (req, res) => {
     res.json({
       ok: true,
+
       service:
         'huelms-sync'
     });
@@ -1344,8 +1410,6 @@ app.get(
 
 // ============================================================
 // POST /jobs
-//
-// Endpoint Apps Script hiện tại đang sử dụng.
 // ============================================================
 
 app.post(
@@ -1406,13 +1470,10 @@ app.post(
       const delayMs =
         Math.max(
           1200,
-
           Math.min(
             5000,
-
             Number(
-              req.body
-                .delayMs ||
+              req.body.delayMs ||
               1800
             )
           )
@@ -1505,8 +1566,6 @@ app.post(
 
 // ============================================================
 // GET /jobs/:id
-//
-// Frontend / Apps Script dùng để xem tiến độ.
 // ============================================================
 
 app.get(
@@ -1569,71 +1628,6 @@ app.get(
 
       return res
         .status(statusCode)
-        .json({
-          error:
-            error.message ||
-            String(error)
-        });
-    }
-  }
-);
-
-// ============================================================
-// DEBUG JOB LIST
-//
-// Không bắt buộc frontend sử dụng.
-// Chỉ để kiểm tra worker.
-// ============================================================
-
-app.get(
-  '/debug/jobs',
-  (req, res) => {
-    try {
-      assertSecret(
-        String(
-          req.get(
-            'X-Theory-Secret'
-          ) || ''
-        )
-      );
-
-      const list =
-        Array.from(
-          jobs.values()
-        ).map(job => ({
-          id:
-            job.id,
-
-          status:
-            job.status,
-
-          processed:
-            job.processed,
-
-          total:
-            job.total,
-
-          errors:
-            job.errors,
-
-          createdAt:
-            job.createdAt,
-
-          finishedAt:
-            job.finishedAt ||
-            ''
-        }));
-
-      res.json({
-        count:
-          list.length,
-
-        jobs:
-          list
-      });
-    } catch (error) {
-      res
-        .status(401)
         .json({
           error:
             error.message ||
