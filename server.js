@@ -356,322 +356,117 @@ async function login(page, username, password) {
 // ============================================================
 
 async function openProgressPage(page) {
-  console.log(
-    '[PROGRESS] Tìm ID trang chi tiết...'
-  );
+  console.log('[PROGRESS] Tìm trang chi tiết tiến độ...');
+  console.log('[PROGRESS] URL hiện tại:', page.url());
 
-  console.log(
-    '[PROGRESS] URL hiện tại:',
-    page.url()
-  );
+  // Nếu HueLMS đã tự chuyển đúng sang /student/ep/{ID} thì KHÔNG goto lại.
+  // Việc goto lại trang chi tiết có thể làm phiên HueLMS ngắn đi hoặc bị logout.
+  if (/\/student\/ep\/\d+\/?$/.test(page.url())) {
+    console.log('[PROGRESS] Đã ở đúng trang chi tiết, giữ nguyên phiên:', page.url());
+    return;
+  }
 
-  const currentMatch =
-    page
-      .url()
-      .match(
-        /\/student\/ep\/(\d+)/
-      );
-
-  if (currentMatch) {
-    console.log(
-      '[PROGRESS] Đã ở đúng trang chi tiết:',
-      page.url()
+  // HueLMS thường chuyển /student/ep -> /student/ep/{ID} bằng JavaScript.
+  // Chỉ chờ ngắn để tránh giữ phiên quá lâu.
+  try {
+    await page.waitForURL(
+      url => /\/student\/ep\/\d+\/?$/.test(url.toString()),
+      { timeout: 7000 }
     );
+  } catch (_) { }
 
+  if (/\/student\/ep\/\d+\/?$/.test(page.url())) {
+    console.log('[PROGRESS] HueLMS tự redirect thành công:', page.url());
     return;
   }
 
   let epId = null;
 
-  // ----------------------------------------------------------
-  // 1. HTML
-  // ----------------------------------------------------------
-
+  // Tìm ID trong HTML/link/resource/storage nếu HueLMS chưa tự đổi URL.
   try {
-    const html =
-      await page.content();
-
-    const match =
-      html.match(
-        /\/student\/ep\/(\d+)/
-      );
-
-    if (match) {
-      epId = match[1];
-
-      console.log(
-        '[PROGRESS] Tìm thấy ID trong HTML:',
-        epId
-      );
-    }
+    const html = await page.content();
+    const match = html.match(/\/student\/ep\/(\d+)/);
+    if (match) epId = match[1];
   } catch (_) { }
 
-  // ----------------------------------------------------------
-  // 2. HREF
-  // ----------------------------------------------------------
-
   if (!epId) {
     try {
-      const hrefs =
-        await page
-          .locator('a[href]')
-          .evaluateAll(elements =>
-            elements.map(
-              el => el.href || ''
-            )
-          );
-
+      const hrefs = await page.locator('a[href]').evaluateAll(elements =>
+        elements.map(el => el.href || '')
+      );
       for (const href of hrefs) {
-        const match =
-          String(href).match(
-            /\/student\/ep\/(\d+)/
-          );
-
+        const match = String(href).match(/\/student\/ep\/(\d+)/);
         if (match) {
           epId = match[1];
-
-          console.log(
-            '[PROGRESS] Tìm thấy ID trong href:',
-            epId
-          );
-
           break;
         }
       }
     } catch (_) { }
   }
 
-  // ----------------------------------------------------------
-  // 3. PERFORMANCE RESOURCE
-  // ----------------------------------------------------------
-
   if (!epId) {
     try {
-      const resources =
-        await page.evaluate(() =>
-          performance
-            .getEntriesByType('resource')
-            .map(
-              item => item.name
-            )
-        );
-
+      const resources = await page.evaluate(() =>
+        performance.getEntriesByType('resource').map(item => item.name)
+      );
       for (const resource of resources) {
-        const match =
-          String(resource).match(
-            /\/student\/ep\/(\d+)/
-          );
-
+        const match = String(resource).match(/\/student\/ep\/(\d+)/);
         if (match) {
           epId = match[1];
-
-          console.log(
-            '[PROGRESS] Tìm thấy ID trong resource:',
-            epId
-          );
-
           break;
         }
       }
     } catch (_) { }
   }
 
-  // ----------------------------------------------------------
-  // 4. STORAGE
-  // ----------------------------------------------------------
-
   if (!epId) {
     try {
-      const storage =
-        await page.evaluate(() => {
-          const result = {};
-
-          for (
-            let i = 0;
-            i < localStorage.length;
-            i++
-          ) {
-            const key =
-              localStorage.key(i);
-
-            result[
-              'local:' + key
-            ] =
-              localStorage.getItem(key);
-          }
-
-          for (
-            let i = 0;
-            i < sessionStorage.length;
-            i++
-          ) {
-            const key =
-              sessionStorage.key(i);
-
-            result[
-              'session:' + key
-            ] =
-              sessionStorage.getItem(key);
-          }
-
-          return result;
-        });
-
-      const match =
-        JSON.stringify(storage)
-          .match(
-            /\/student\/ep\/(\d+)/
-          );
-
-      if (match) {
-        epId = match[1];
-
-        console.log(
-          '[PROGRESS] Tìm thấy ID trong storage:',
-          epId
-        );
-      }
+      const storage = await page.evaluate(() => {
+        const result = {};
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          result['local:' + key] = localStorage.getItem(key);
+        }
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const key = sessionStorage.key(i);
+          result['session:' + key] = sessionStorage.getItem(key);
+        }
+        return result;
+      });
+      const match = JSON.stringify(storage).match(/\/student\/ep\/(\d+)/);
+      if (match) epId = match[1];
     } catch (_) { }
   }
 
-  // ----------------------------------------------------------
-  // 5. NGHE NETWORK TRONG 5 GIÂY
-  // ----------------------------------------------------------
-
-  if (!epId) {
-    console.log(
-      '[PROGRESS] Chưa thấy ID, nghe network trong 5 giây...'
-    );
-
-    let networkId = null;
-
-    const detect = url => {
-      const match =
-        String(url || '').match(
-          /\/student\/ep\/(\d+)/
-        );
-
-      if (match) {
-        networkId = match[1];
-      }
-    };
-
-    const onRequest =
-      request => {
-        detect(request.url());
-      };
-
-    const onResponse =
-      response => {
-        detect(response.url());
-      };
-
-    page.on(
-      'request',
-      onRequest
-    );
-
-    page.on(
-      'response',
-      onResponse
-    );
-
-    await page.waitForTimeout(
-      5000
-    );
-
-    page.off(
-      'request',
-      onRequest
-    );
-
-    page.off(
-      'response',
-      onResponse
-    );
-
-    if (networkId) {
-      epId = networkId;
-
-      console.log(
-        '[PROGRESS] Tìm thấy ID từ network:',
-        epId
-      );
-    }
+  // Kiểm tra lần cuối vì URL có thể đổi trong lúc đọc HTML/storage.
+  const currentMatch = page.url().match(/\/student\/ep\/(\d+)/);
+  if (currentMatch) {
+    console.log('[PROGRESS] URL đã tự chuyển trong lúc dò:', page.url());
+    return;
   }
 
-  // ----------------------------------------------------------
-  // 6. NẾU TRONG 5 GIÂY TỰ REDIRECT THÌ NHẬN LUÔN
-  // ----------------------------------------------------------
-
   if (!epId) {
-    const redirectMatch =
-      page
-        .url()
-        .match(
-          /\/student\/ep\/(\d+)/
-        );
-
-    if (redirectMatch) {
-      epId = redirectMatch[1];
-
-      console.log(
-        '[PROGRESS] Tự redirect được ID:',
-        epId
-      );
-    }
-  }
-
-  // ----------------------------------------------------------
-  // 7. MỞ TRỰC TIẾP
-  // ----------------------------------------------------------
-
-  if (epId) {
-    const target =
-      `${BASE_URL}/student/ep/${epId}`;
-
-    console.log(
-      '[PROGRESS] Mở trực tiếp:',
-      target
-    );
-
-    await page.goto(
-      target,
-      {
-        waitUntil:
-          'domcontentloaded',
-
-        timeout:
-          60000
-      }
-    );
-
-    await page.waitForTimeout(
-      1200
-    );
-
-    console.log(
-      '[PROGRESS] URL sau khi mở:',
+    throw new Error(
+      'Đăng nhập thành công nhưng chưa xác định được ID trang tiến độ. URL hiện tại: ' +
       page.url()
     );
-
-    if (
-      /\/student\/ep\/\d+\/?$/.test(
-        page.url()
-      )
-    ) {
-      console.log(
-        '[PROGRESS] Vào trang chi tiết thành công.'
-      );
-
-      return;
-    }
   }
 
-  throw new Error(
-    'Đăng nhập HueLMS thành công nhưng chưa xác định được ID trang /student/ep/{ID}. URL hiện tại: ' +
-    page.url()
-  );
+  const target = `${BASE_URL}/student/ep/${epId}`;
+  console.log('[PROGRESS] Chỉ khi chưa tự redirect mới mở trực tiếp:', target);
+
+  await page.goto(target, {
+    waitUntil: 'domcontentloaded',
+    timeout: 30000
+  });
+
+  if (!/\/student\/ep\/\d+\/?$/.test(page.url())) {
+    throw new Error(
+      'Không vào được trang chi tiết tiến độ. URL hiện tại: ' + page.url()
+    );
+  }
+
+  console.log('[PROGRESS] Vào trang chi tiết thành công:', page.url());
 }
 
 // ============================================================
@@ -682,23 +477,13 @@ async function scrapeProgress(page) {
   console.log('[SCRAPE] Đọc tiến độ HueLMS...');
   console.log('[SCRAPE] URL:', page.url());
 
-  await page.waitForLoadState('domcontentloaded').catch(() => { });
-  await page.waitForTimeout(1200);
+  // Không chờ table 15 giây nữa. Phiên HueLMS có thể rất ngắn.
+  // Chỉ cho JavaScript hoàn tất một nhịp nhỏ rồi đọc ngay nội dung đang hiển thị.
+  await page.waitForTimeout(500);
 
-  // Chờ đúng bảng "Lớp học" xuất hiện. HueLMS có thêm bảng "Bảng điểm khóa học"
-  // ở phía dưới, vì vậy không đọc toàn bộ trang bằng một regex chung.
-  await page.locator('table').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => { });
-
-  const rows = await page.locator('table tr').evaluateAll(elements =>
-    elements.map(tr => {
-      const cells = Array.from(tr.querySelectorAll('th,td')).map(td =>
-        (td.innerText || td.textContent || '').replace(/\s+/g, ' ').trim()
-      );
-      return { cells, text: cells.join(' ') };
-    }).filter(row => row.cells.length)
-  ).catch(() => []);
-
-  console.log('[SCRAPE] Số dòng bảng tìm được:', rows.length);
+  if (/\/user\/login/i.test(page.url())) {
+    throw new Error('HueLMS đã logout trước khi đọc được tiến độ.');
+  }
 
   const scores = {
     ethics: 0,
@@ -722,61 +507,162 @@ async function scrapeProgress(page) {
     simulation: false
   };
 
-  function setValue(key, percent, rowText) {
-    if (percent === null || percent === undefined || !Number.isFinite(Number(percent))) return;
-    scores[key] = Number(percent);
-    passed[key] = /(^|\s)dat($|\s)/.test(norm(rowText));
+  const found = new Set();
+
+  function identifyKey(label) {
+    const name = norm(label);
+    if (name.includes('dao duc nguoi lai xe') || name.includes('dao duc') || name.includes('vhgt') || name.includes('pccc')) return 'ethics';
+    if (name.includes('ky thuat lai xe')) return 'drivingTechnique';
+    if (name.includes('cau tao sua chua') || (name.includes('cau tao') && name.includes('sua chua'))) return 'vehicleStructure';
+    if (name.includes('phap luat giao thong duong bo') || name.includes('phap luat gtdb')) return 'trafficLaw';
+    if (name.includes('phan 1') || /^pl1\b/.test(name)) return 'pl1';
+    if (name.includes('phan 2') || /^pl2\b/.test(name)) return 'pl2';
+    if (name.includes('phan 3') || /^pl3\b/.test(name)) return 'pl3';
+    if (name.includes('mo phong cac tinh huong giao thong') || name.includes('mo phong')) return 'simulation';
+    return null;
   }
 
-  for (const row of rows) {
-    const cells = row.cells || [];
-    if (cells.length < 2) continue;
+  function record(key, percent, rowText) {
+    if (!key || percent === null || !Number.isFinite(Number(percent))) return;
+    scores[key] = Number(percent);
+    passed[key] = /(^|\s)dat($|\s)/.test(norm(rowText));
+    found.add(key);
+    console.log(`[SCRAPE] ${key} = ${scores[key]}% | đạt=${passed[key]}`);
+  }
 
-    const name = norm(cells[0]);
-    const rowText = norm(row.text);
+  // ----------------------------------------------------------
+  // CÁCH 1: ĐỌC CÁC HÀNG TABLE NẾU DOM CÓ TABLE THẬT
+  // ----------------------------------------------------------
+  try {
+    const rows = await page.locator('tr').evaluateAll(elements =>
+      elements.map(tr => {
+        const cells = Array.from(tr.querySelectorAll('th,td')).map(td =>
+          (td.innerText || td.textContent || '').replace(/\s+/g, ' ').trim()
+        );
+        return { cells, text: (tr.innerText || tr.textContent || '').replace(/\s+/g, ' ').trim() };
+      }).filter(row => row.text)
+    );
 
-    // Cột 2 của bảng Lớp học là "Tiến độ". Ưu tiên đọc trực tiếp cột này.
-    // Nếu DOM thay đổi thì mới fallback sang toàn bộ dòng.
-    let percent = parsePercent(cells[1]);
-    if (percent === null) percent = parsePercent(row.text);
-    if (percent === null) continue;
+    console.log('[SCRAPE] Số row DOM tìm được:', rows.length);
 
-    console.log('[SCRAPE] Dòng:', JSON.stringify(cells), '=>', percent);
+    for (const row of rows) {
+      const cells = row.cells || [];
+      const label = cells[0] || row.text;
+      const key = identifyKey(label);
+      if (!key) continue;
 
-    if (name.includes('dao duc nguoi lai xe') || name.includes('dao duc') || name.includes('vhgt') || name.includes('pccc')) {
-      setValue('ethics', percent, rowText);
-      continue;
+      // Bảng Lớp học có cột Tiến độ là cột thứ 2.
+      // Nếu không đúng cấu trúc thì tìm % đầu tiên trong cả dòng.
+      let percent = cells.length > 1 ? parsePercent(cells[1]) : null;
+      if (percent === null) percent = parsePercent(row.text);
+      if (percent === null) continue;
+
+      record(key, percent, row.text);
     }
-    if (name.includes('ky thuat lai xe')) {
-      setValue('drivingTechnique', percent, rowText);
-      continue;
+  } catch (error) {
+    console.log('[SCRAPE] Đọc row DOM lỗi:', error.message);
+  }
+
+  // ----------------------------------------------------------
+  // CÁCH 2: FALLBACK ĐỌC TEXT ĐANG HIỂN THỊ TRÊN PAGE/IFRAME
+  // ----------------------------------------------------------
+  if (found.size < 8) {
+    const texts = [];
+
+    for (const frame of page.frames()) {
+      try {
+        const text = await frame.locator('body').innerText({ timeout: 3000 });
+        if (text) texts.push(text);
+      } catch (_) { }
     }
-    if (name.includes('cau tao sua chua') || (name.includes('cau tao') && name.includes('sua chua'))) {
-      setValue('vehicleStructure', percent, rowText);
-      continue;
+
+    const pageText = texts.join('\n');
+    console.log('[SCRAPE] Độ dài text đọc được:', pageText.length);
+
+    if (!pageText.trim()) {
+      throw new Error('Không đọc được nội dung trang tiến độ HueLMS.');
     }
-    if (name.includes('phap luat giao thong duong bo') || name.includes('phap luat gtdb')) {
-      setValue('trafficLaw', percent, rowText);
-      continue;
+
+    // Chuẩn hóa theo từng dòng nhưng giữ nguyên %.
+    const lines = pageText
+      .split(/\r?\n/)
+      .map(line => line.replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+
+    // Ghép các cửa sổ 1-4 dòng vì HueLMS có thể tách tên môn và % thành các dòng khác nhau.
+    const chunks = [];
+    for (let i = 0; i < lines.length; i++) {
+      for (let size = 1; size <= 4 && i + size <= lines.length; size++) {
+        chunks.push(lines.slice(i, i + size).join(' '));
+      }
     }
-    if (name.includes('phan 1') || /^pl1\b/.test(name)) {
-      setValue('pl1', percent, rowText);
-      continue;
+
+    for (const chunk of chunks) {
+      const key = identifyKey(chunk);
+      if (!key || found.has(key)) continue;
+
+      const percent = parsePercent(chunk);
+      if (percent === null) continue;
+
+      record(key, percent, chunk);
     }
-    if (name.includes('phan 2') || /^pl2\b/.test(name)) {
-      setValue('pl2', percent, rowText);
-      continue;
+
+    // Regex nhắm đúng từng nhãn, phòng trường hợp DOM gom cả bảng thành một đoạn dài.
+    const targeted = [
+      ['ethics', /(?:Đạo đức[^\n%]{0,160}|VHGT[^\n%]{0,160}|PCCC[^\n%]{0,160})(\d+(?:[.,]\d+)?)\s*%/i],
+      ['drivingTechnique', /Kỹ thuật lái xe[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i],
+      ['vehicleStructure', /Cấu tạo sửa chữa[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i],
+      ['trafficLaw', /Pháp luật(?: giao thông đường bộ| GTĐB)?[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i],
+      ['pl1', /(?:Phần\s*1|PL1)[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i],
+      ['pl2', /(?:Phần\s*2|PL2)[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i],
+      ['pl3', /(?:Phần\s*3|PL3)[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i],
+      ['simulation', /Mô phỏng[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i]
+    ];
+
+    for (const [key, regex] of targeted) {
+      if (found.has(key)) continue;
+      const match = pageText.match(regex);
+      if (!match) continue;
+      const percent = Number(match[1].replace(',', '.'));
+      if (!Number.isFinite(percent)) continue;
+      record(key, percent, match[0]);
     }
-    if (name.includes('phan 3') || /^pl3\b/.test(name)) {
-      setValue('pl3', percent, rowText);
-      continue;
-    }
-    if (name.includes('mo phong cac tinh huong giao thong') || name.includes('mo phong')) {
-      setValue('simulation', percent, rowText);
-    }
+  }
+
+  // ----------------------------------------------------------
+  // BẢO VỆ DỮ LIỆU: KHÔNG GHI ĐÈ 0 NẾU SCRAPE THẤT BẠI
+  // ----------------------------------------------------------
+  console.log('[SCRAPE] Số mục đọc được:', found.size, '/8');
+
+  if (found.size === 0) {
+    throw new Error(
+      'Không đọc được bất kỳ tiến độ nào từ HueLMS; hủy callback dữ liệu 0 để tránh ghi đè.'
+    );
+  }
+
+  // Với trang ô tô hiện tại cần đủ 8 mục. Nếu thiếu, coi là lỗi để không lưu dữ liệu nửa vời.
+  const requiredKeys = [
+    'ethics',
+    'drivingTechnique',
+    'vehicleStructure',
+    'trafficLaw',
+    'pl1',
+    'pl2',
+    'pl3',
+    'simulation'
+  ];
+  const missing = requiredKeys.filter(key => !found.has(key));
+
+  if (missing.length) {
+    throw new Error(
+      'Đọc tiến độ chưa đầy đủ, còn thiếu: ' + missing.join(', ') + '. Không ghi đè Google Sheets.'
+    );
   }
 
   const anyProgress = Object.values(scores).some(v => Number(v) > 0);
+
+  // HueLMS đang hiển thị chữ "Đạt" ở cột cuối từng môn.
+  // Nếu không đọc được cột Đạt nhưng có đủ tiến độ, vẫn để Đang học thay vì tự kết luận hoàn thành.
   const completed = [
     passed.ethics,
     passed.drivingTechnique,
@@ -795,7 +681,7 @@ async function scrapeProgress(page) {
     sourceUrl: page.url(),
     syncedAt: new Date().toISOString(),
 
-    // Alias phẳng để tương thích Apps Script cũ nếu callback đang đọc result.ethics...
+    // Alias phẳng để tương thích với Apps Script đang dùng.
     ethics: scores.ethics,
     drivingTechnique: scores.drivingTechnique,
     vehicleStructure: scores.vehicleStructure,
@@ -806,7 +692,7 @@ async function scrapeProgress(page) {
     simulation: scores.simulation
   };
 
-  console.log('[SCRAPE] Kết quả:', JSON.stringify(result));
+  console.log('[SCRAPE] Kết quả cuối:', JSON.stringify(result));
   return result;
 }
 
