@@ -65,15 +65,16 @@ function parsePercent(value) {
     .replace(/\u00a0/g, ' ')
     .trim();
 
+  // Không cho phép bắt đầu match ở giữa một số như 76.6% -> 6%.
   const match = text.match(
-    /(?:^|[^\d])(\d{1,3}(?:[.,]\d+)?)\s*%/
+    /(?:^|[^\d])([0-9]{1,3}(?:[.,][0-9]+)?)\s*%/
   );
 
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
 
-  const number = Number(
-    match[1].replace(',', '.')
-  );
+  const number = Number(match[1].replace(',', '.'));
 
   if (!Number.isFinite(number)) {
     return null;
@@ -479,10 +480,6 @@ async function scrapeProgress(page) {
   console.log('[SCRAPE] Đọc tiến độ HueLMS...');
   console.log('[SCRAPE] URL:', page.url());
 
-  // Không chờ table 15 giây nữa. Phiên HueLMS có thể rất ngắn.
-  // Chỉ cho JavaScript hoàn tất một nhịp nhỏ rồi đọc ngay nội dung đang hiển thị.
-  await page.waitForTimeout(500);
-
   if (/\/user\/login/i.test(page.url())) {
     throw new Error('HueLMS đã logout trước khi đọc được tiến độ.');
   }
@@ -532,117 +529,213 @@ async function scrapeProgress(page) {
     console.log(`[SCRAPE] ${key} = ${scores[key]}% | đạt=${passed[key]}`);
   }
 
-  // ----------------------------------------------------------
-  // CÁCH 1: ĐỌC CÁC HÀNG TABLE NẾU DOM CÓ TABLE THẬT
-  // ----------------------------------------------------------
-  try {
-    const rows = await page.locator('tr').evaluateAll(elements =>
-      elements.map(tr => {
-        const cells = Array.from(tr.querySelectorAll('th,td')).map(td =>
-          (td.innerText || td.textContent || '').replace(/\s+/g, ' ').trim()
-        );
-        return { cells, text: (tr.innerText || tr.textContent || '').replace(/\s+/g, ' ').trim() };
-      }).filter(row => row.text)
-    );
+  // HueLMS/Render đôi khi đã đổi URL sang /student/ep/{ID} nhưng DOM còn trắng vài giây.
+  // Chờ nội dung thật xuất hiện thay vì đọc ngay và nhận 0 ký tự.
+  let pageText = '';
+  let readyRows = [];
+  const waitStarted = Date.now();
+  const WAIT_MS = 12000;
 
-    console.log('[SCRAPE] Số row DOM tìm được:', rows.length);
-
-    for (const row of rows) {
-      const cells = row.cells || [];
-      const label = cells[0] || row.text;
-      const key = identifyKey(label);
-      if (!key) continue;
-
-      // Bảng Lớp học có cột Tiến độ là cột thứ 2.
-      // Nếu không đúng cấu trúc thì tìm % đầu tiên trong cả dòng.
-      let percent = cells.length > 1 ? parsePercent(cells[1]) : null;
-      if (percent === null) percent = parsePercent(row.text);
-      if (percent === null) continue;
-
-      record(key, percent, row.text);
+  while (Date.now() - waitStarted < WAIT_MS) {
+    if (/\/user\/login/i.test(page.url())) {
+      throw new Error('HueLMS đã logout trong lúc chờ tải nội dung tiến độ.');
     }
-  } catch (error) {
-    console.log('[SCRAPE] Đọc row DOM lỗi:', error.message);
-  }
 
-  // ----------------------------------------------------------
-  // CÁCH 2: FALLBACK ĐỌC TEXT ĐANG HIỂN THỊ TRÊN PAGE/IFRAME
-  // ----------------------------------------------------------
-  if (found.size < 8) {
+    // Đọc row trực tiếp nếu bảng đã render.
+    try {
+      readyRows = await page.locator('tr').evaluateAll(elements =>
+        elements.map(tr => {
+          const cells = Array.from(tr.querySelectorAll('th,td')).map(td =>
+            (td.innerText || td.textContent || '').replace(/\s+/g, ' ').trim()
+          );
+          return {
+            cells,
+            text: (tr.innerText || tr.textContent || '').replace(/\s+/g, ' ').trim()
+          };
+        }).filter(row => row.text)
+      );
+    } catch (_) {
+      readyRows = [];
+    }
+
+    // Đọc textContent/innerText từ mọi frame. textContent bền hơn innerText trên headless.
     const texts = [];
-
     for (const frame of page.frames()) {
       try {
-        const text = await frame.locator('body').innerText({ timeout: 3000 });
-        if (text) texts.push(text);
+        const text = await frame.evaluate(() => {
+          const root = document.documentElement;
+          const body = document.body;
+          return (
+            (body && (body.innerText || body.textContent)) ||
+            (root && (root.innerText || root.textContent)) ||
+            ''
+          );
+        });
+        if (text && String(text).trim()) texts.push(String(text));
       } catch (_) { }
     }
 
-    const pageText = texts.join('\n');
-    console.log('[SCRAPE] Độ dài text đọc được:', pageText.length);
+    pageText = texts.join('\n');
 
-    if (!pageText.trim()) {
-      throw new Error('Không đọc được nội dung trang tiến độ HueLMS.');
-    }
+    const normalized = norm(pageText);
+    const hasExpectedContent =
+      readyRows.length > 0 ||
+      normalized.includes('ky thuat lai xe') ||
+      normalized.includes('phap luat giao thong duong bo') ||
+      normalized.includes('mo phong cac tinh huong giao thong');
 
-    // Chuẩn hóa theo từng dòng nhưng giữ nguyên %.
-    const lines = pageText
-      .split(/\r?\n/)
-      .map(line => line.replace(/\s+/g, ' ').trim())
-      .filter(Boolean);
+    if (hasExpectedContent) break;
 
-    // Ghép các cửa sổ 1-4 dòng vì HueLMS có thể tách tên môn và % thành các dòng khác nhau.
-    const chunks = [];
-    for (let i = 0; i < lines.length; i++) {
-      for (let size = 1; size <= 4 && i + size <= lines.length; size++) {
-        chunks.push(lines.slice(i, i + size).join(' '));
+    await page.waitForTimeout(350);
+  }
+
+  console.log('[SCRAPE] Số row DOM tìm được:', readyRows.length);
+  console.log('[SCRAPE] Độ dài text đọc được:', pageText.length);
+
+  // ----------------------------------------------------------
+  // CÁCH 1: TABLE ROW - chính xác nhất nếu DOM có bảng thật
+  // ----------------------------------------------------------
+  for (const row of readyRows) {
+    const cells = row.cells || [];
+    const label = cells[0] || row.text;
+    const key = identifyKey(label);
+    if (!key) continue;
+
+    // Bảng Lớp học: Tên lớp | Tiến độ | Số giờ | Đạt
+    let percent = cells.length > 1 ? parsePercent(cells[1]) : null;
+    if (percent === null) percent = parsePercent(row.text);
+    if (percent === null) continue;
+
+    record(key, percent, row.text);
+  }
+
+  // ----------------------------------------------------------
+  // CÁCH 2: TEXT FALLBACK - lấy % đầu tiên ngay sau đúng nhãn môn
+  // Không dùng regex greedy để tránh 76.6% bị cắt thành 6%.
+  // ----------------------------------------------------------
+  if (found.size < 8 && pageText.trim()) {
+    const compact = norm(pageText);
+
+    const labelMap = {
+      ethics: [
+        'dao duc nguoi lai xe',
+        'dao duc',
+        'vhgt',
+        'pccc'
+      ],
+      drivingTechnique: [
+        'ky thuat lai xe o to',
+        'ky thuat lai xe'
+      ],
+      vehicleStructure: [
+        'cau tao sua chua'
+      ],
+      trafficLaw: [
+        'phap luat giao thong duong bo',
+        'phap luat gtdb'
+      ],
+      pl1: [
+        'phan 1.',
+        'phan 1 ',
+        'pl1'
+      ],
+      pl2: [
+        'phan 2.',
+        'phan 2 ',
+        'pl2'
+      ],
+      pl3: [
+        'phan 3.',
+        'phan 3 ',
+        'pl3'
+      ],
+      simulation: [
+        'mo phong cac tinh huong giao thong',
+        'mo phong'
+      ]
+    };
+
+    for (const [key, labels] of Object.entries(labelMap)) {
+      if (found.has(key)) continue;
+
+      let bestIndex = -1;
+      let bestLabel = '';
+
+      for (const label of labels) {
+        const idx = compact.indexOf(label);
+        if (idx >= 0 && (bestIndex < 0 || idx < bestIndex)) {
+          bestIndex = idx;
+          bestLabel = label;
+        }
       }
-    }
 
-    for (const chunk of chunks) {
-      const key = identifyKey(chunk);
-      if (!key || found.has(key)) continue;
+      if (bestIndex < 0) continue;
 
-      const percent = parsePercent(chunk);
+      // Chỉ nhìn một đoạn ngắn ngay sau nhãn để không ăn % của môn kế tiếp.
+      const segment = compact.slice(bestIndex, bestIndex + Math.max(220, bestLabel.length + 180));
+      const percent = parsePercent(segment);
       if (percent === null) continue;
 
-      record(key, percent, chunk);
-    }
-
-    // Regex nhắm đúng từng nhãn, phòng trường hợp DOM gom cả bảng thành một đoạn dài.
-    const targeted = [
-      ['ethics', /(?:Đạo đức[^\n%]{0,160}|VHGT[^\n%]{0,160}|PCCC[^\n%]{0,160})(\d+(?:[.,]\d+)?)\s*%/i],
-      ['drivingTechnique', /Kỹ thuật lái xe[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i],
-      ['vehicleStructure', /Cấu tạo sửa chữa[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i],
-      ['trafficLaw', /Pháp luật(?: giao thông đường bộ| GTĐB)?[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i],
-      ['pl1', /(?:Phần\s*1|PL1)[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i],
-      ['pl2', /(?:Phần\s*2|PL2)[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i],
-      ['pl3', /(?:Phần\s*3|PL3)[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i],
-      ['simulation', /Mô phỏng[^\n%]{0,160}(\d+(?:[.,]\d+)?)\s*%/i]
-    ];
-
-    for (const [key, regex] of targeted) {
-      if (found.has(key)) continue;
-      const match = pageText.match(regex);
-      if (!match) continue;
-      const percent = Number(match[1].replace(',', '.'));
-      if (!Number.isFinite(percent)) continue;
-      record(key, percent, match[0]);
+      record(key, percent, segment);
     }
   }
 
   // ----------------------------------------------------------
-  // BẢO VỆ DỮ LIỆU: KHÔNG GHI ĐÈ 0 NẾU SCRAPE THẤT BẠI
+  // CÁCH 3: HTML FALLBACK - nếu headless có HTML nhưng textContent chưa ổn
   // ----------------------------------------------------------
+  if (found.size < 8) {
+    try {
+      const html = await page.content();
+      if (html && html.length > 100) {
+        const stripped = html
+          .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+          .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&amp;/gi, '&')
+          .replace(/\s+/g, ' ');
+
+        const compact = norm(stripped);
+        const labelMap = {
+          ethics: ['dao duc nguoi lai xe', 'dao duc', 'vhgt', 'pccc'],
+          drivingTechnique: ['ky thuat lai xe o to', 'ky thuat lai xe'],
+          vehicleStructure: ['cau tao sua chua'],
+          trafficLaw: ['phap luat giao thong duong bo', 'phap luat gtdb'],
+          pl1: ['phan 1.', 'phan 1 ', 'pl1'],
+          pl2: ['phan 2.', 'phan 2 ', 'pl2'],
+          pl3: ['phan 3.', 'phan 3 ', 'pl3'],
+          simulation: ['mo phong cac tinh huong giao thong', 'mo phong']
+        };
+
+        for (const [key, labels] of Object.entries(labelMap)) {
+          if (found.has(key)) continue;
+          let idx = -1;
+          for (const label of labels) {
+            const current = compact.indexOf(label);
+            if (current >= 0 && (idx < 0 || current < idx)) idx = current;
+          }
+          if (idx < 0) continue;
+
+          const segment = compact.slice(idx, idx + 240);
+          const percent = parsePercent(segment);
+          if (percent === null) continue;
+          record(key, percent, segment);
+        }
+      }
+    } catch (error) {
+      console.log('[SCRAPE] HTML fallback lỗi:', error.message);
+    }
+  }
+
   console.log('[SCRAPE] Số mục đọc được:', found.size, '/8');
 
+  // Không ghi đè Google Sheets nếu trang chưa tải xong hoặc scrape thất bại.
   if (found.size === 0) {
     throw new Error(
-      'Không đọc được bất kỳ tiến độ nào từ HueLMS; hủy callback dữ liệu 0 để tránh ghi đè.'
+      'Không đọc được nội dung trang tiến độ HueLMS sau khi chờ tải. Không ghi đè dữ liệu 0.'
     );
   }
 
-  // Với trang ô tô hiện tại cần đủ 8 mục. Nếu thiếu, coi là lỗi để không lưu dữ liệu nửa vời.
   const requiredKeys = [
     'ethics',
     'drivingTechnique',
@@ -653,8 +746,8 @@ async function scrapeProgress(page) {
     'pl3',
     'simulation'
   ];
-  const missing = requiredKeys.filter(key => !found.has(key));
 
+  const missing = requiredKeys.filter(key => !found.has(key));
   if (missing.length) {
     throw new Error(
       'Đọc tiến độ chưa đầy đủ, còn thiếu: ' + missing.join(', ') + '. Không ghi đè Google Sheets.'
@@ -663,8 +756,6 @@ async function scrapeProgress(page) {
 
   const anyProgress = Object.values(scores).some(v => Number(v) > 0);
 
-  // HueLMS đang hiển thị chữ "Đạt" ở cột cuối từng môn.
-  // Nếu không đọc được cột Đạt nhưng có đủ tiến độ, vẫn để Đang học thay vì tự kết luận hoàn thành.
   const completed = [
     passed.ethics,
     passed.drivingTechnique,
@@ -683,7 +774,7 @@ async function scrapeProgress(page) {
     sourceUrl: page.url(),
     syncedAt: new Date().toISOString(),
 
-    // Alias phẳng để tương thích với Apps Script đang dùng.
+    // Alias phẳng để tương thích Apps Script hiện tại.
     ethics: scores.ethics,
     drivingTechnique: scores.drivingTechnique,
     vehicleStructure: scores.vehicleStructure,
