@@ -75,11 +75,9 @@ function parsePercent(value) {
     match[1].replace(',', '.')
   );
 
-  if (!Number.isFinite(number)) {
-    return null;
-  }
-
-  return number;
+  return Number.isFinite(number)
+    ? number
+    : null;
 }
 
 function assertSecret(value) {
@@ -91,10 +89,6 @@ function assertSecret(value) {
     throw new Error('UNAUTHORIZED');
   }
 }
-
-// ============================================================
-// PLAYWRIGHT HELPERS
-// ============================================================
 
 async function firstVisible(page, selectors) {
   for (const selector of selectors) {
@@ -117,12 +111,11 @@ async function firstVisible(page, selectors) {
 }
 
 // ============================================================
-// LOGIN HUELMS
+// LOGIN
 // ============================================================
 
 async function login(page, username, password) {
-  const masked =
-    maskUsername(username);
+  const masked = maskUsername(username);
 
   console.log(
     '==================================================='
@@ -131,10 +124,6 @@ async function login(page, username, password) {
   console.log(
     `[LOGIN] Bắt đầu: ${masked}`
   );
-
-  // ----------------------------------------------------------
-  // 1. MỞ TRANG CHỦ
-  // ----------------------------------------------------------
 
   await page.goto(BASE_URL, {
     waitUntil: 'domcontentloaded',
@@ -148,33 +137,16 @@ async function login(page, username, password) {
     page.url()
   );
 
-  console.log(
-    '[LOGIN] Title:',
-    await page
-      .title()
-      .catch(() => '')
-  );
-
-  // ----------------------------------------------------------
-  // 2. TÌM FORM LOGIN
-  // ----------------------------------------------------------
-
   let userInput =
     await firstVisible(page, [
       'input[placeholder*="Tên đăng nhập" i]',
-      'input[placeholder*="tên đăng nhập" i]',
       'input[placeholder*="tài khoản" i]',
-      'input[placeholder*="username" i]',
-
       'input[name="username"]',
       'input[name="userName"]',
       'input[name="login"]',
       'input[name="account"]',
-      'input[name="email"]',
-
       'input[id*="username" i]',
       'input[id*="login" i]',
-
       'input[type="text"]'
     ]);
 
@@ -182,18 +154,11 @@ async function login(page, username, password) {
     await firstVisible(page, [
       'input[placeholder*="Nhập mật khẩu" i]',
       'input[placeholder*="mật khẩu" i]',
-
       'input[name="password"]',
       'input[name="Password"]',
-
       'input[id*="password" i]',
-
       'input[type="password"]'
     ]);
-
-  // ----------------------------------------------------------
-  // 3. NẾU CHƯA CÓ FORM, MỞ /user/login
-  // ----------------------------------------------------------
 
   if (!userInput || !passInput) {
     console.log(
@@ -218,19 +183,13 @@ async function login(page, username, password) {
     userInput =
       await firstVisible(page, [
         'input[placeholder*="Tên đăng nhập" i]',
-        'input[placeholder*="tên đăng nhập" i]',
         'input[placeholder*="tài khoản" i]',
-        'input[placeholder*="username" i]',
-
         'input[name="username"]',
         'input[name="userName"]',
         'input[name="login"]',
         'input[name="account"]',
-        'input[name="email"]',
-
         'input[id*="username" i]',
         'input[id*="login" i]',
-
         'input[type="text"]'
       ]);
 
@@ -238,19 +197,12 @@ async function login(page, username, password) {
       await firstVisible(page, [
         'input[placeholder*="Nhập mật khẩu" i]',
         'input[placeholder*="mật khẩu" i]',
-
         'input[name="password"]',
         'input[name="Password"]',
-
         'input[id*="password" i]',
-
         'input[type="password"]'
       ]);
   }
-
-  // ----------------------------------------------------------
-  // 4. DEBUG NẾU KHÔNG THẤY FORM
-  // ----------------------------------------------------------
 
   if (!userInput || !passInput) {
     const inputs =
@@ -282,10 +234,6 @@ async function login(page, username, password) {
     '[LOGIN] Đã tìm thấy form đăng nhập.'
   );
 
-  // ----------------------------------------------------------
-  // 5. NHẬP TÀI KHOẢN
-  // ----------------------------------------------------------
-
   await userInput.fill(
     String(username).trim()
   );
@@ -298,24 +246,15 @@ async function login(page, username, password) {
     '[LOGIN] Đã nhập tài khoản và mật khẩu.'
   );
 
-  // ----------------------------------------------------------
-  // 6. TÌM NÚT ĐĂNG NHẬP
-  // ----------------------------------------------------------
-
   const buttonSelectors = [
     'button:has-text("Đăng nhập")',
     'button:has-text("ĐĂNG NHẬP")',
-
     '[role="button"]:has-text("Đăng nhập")',
-
     'button[type="submit"]',
     'input[type="submit"]',
-
     'form button',
     'form [type="submit"]',
-
     '.btn:has-text("Đăng nhập")',
-
     'a:has-text("Đăng nhập")'
   ];
 
@@ -344,99 +283,18 @@ async function login(page, username, password) {
         submitted = true;
         break;
       }
-    } catch (error) {
-      console.log(
-        `[LOGIN] Không click được ${selector}:`,
-        error.message
-      );
-    }
+    } catch (_) { }
   }
-
-  // ----------------------------------------------------------
-  // 7. FALLBACK DOM
-  // ----------------------------------------------------------
 
   if (!submitted) {
     console.log(
-      '[LOGIN] Thử click nút bằng text DOM...'
-    );
-
-    try {
-      submitted =
-        await page.evaluate(() => {
-          const elements =
-            Array.from(
-              document.querySelectorAll(
-                [
-                  'button',
-                  'input[type="submit"]',
-                  'a',
-                  '[role="button"]',
-                  '.btn'
-                ].join(',')
-              )
-            );
-
-          const target =
-            elements.find(el => {
-              const text =
-                String(
-                  el.innerText ||
-                  el.value ||
-                  el.textContent ||
-                  ''
-                )
-                  .replace(/\s+/g, ' ')
-                  .trim()
-                  .toLowerCase();
-
-              return (
-                text === 'đăng nhập' ||
-                text.includes('đăng nhập')
-              );
-            });
-
-          if (!target) {
-            return false;
-          }
-
-          target.click();
-
-          return true;
-        });
-
-      if (submitted) {
-        console.log(
-          '[LOGIN] Đã click nút bằng DOM.'
-        );
-      }
-    } catch (error) {
-      console.log(
-        '[LOGIN] DOM click thất bại:',
-        error.message
-      );
-    }
-  }
-
-  // ----------------------------------------------------------
-  // 8. FALLBACK ENTER
-  // ----------------------------------------------------------
-
-  if (!submitted) {
-    console.log(
-      '[LOGIN] Không tìm thấy button chuẩn, thử Enter...'
+      '[LOGIN] Không tìm thấy nút chuẩn, thử Enter...'
     );
 
     try {
       await passInput.press('Enter');
-
       submitted = true;
-    } catch (error) {
-      console.log(
-        '[LOGIN] Enter thất bại:',
-        error.message
-      );
-    }
+    } catch (_) { }
   }
 
   if (!submitted) {
@@ -448,10 +306,6 @@ async function login(page, username, password) {
   console.log(
     '[LOGIN] Đã gửi form đăng nhập.'
   );
-
-  // ----------------------------------------------------------
-  // 9. CHỜ RỜI TRANG LOGIN
-  // ----------------------------------------------------------
 
   try {
     await page.waitForURL(
@@ -476,58 +330,6 @@ async function login(page, username, password) {
     page.url()
   );
 
-  // ----------------------------------------------------------
-  // 10. HUELMS:
-  // /student/ep -> /student/ep/{ID}
-  // ----------------------------------------------------------
-
-  if (
-    /\/student\/ep\/?$/.test(
-      page.url()
-    )
-  ) {
-    console.log(
-      '[LOGIN] Đang ở /student/ep, chờ redirect tới ID học viên...'
-    );
-
-    try {
-      await page.waitForURL(
-        url =>
-          /\/student\/ep\/\d+\/?$/.test(
-            url.toString()
-          ),
-        {
-          timeout: 20000
-        }
-      );
-
-      console.log(
-        '[LOGIN] Redirect chi tiết thành công:',
-        page.url()
-      );
-    } catch (_) {
-      console.log(
-        '[LOGIN] Redirect chi tiết chưa hoàn tất.'
-      );
-    }
-  }
-
-  console.log(
-    '[LOGIN] URL cuối:',
-    page.url()
-  );
-
-  console.log(
-    '[LOGIN] Title:',
-    await page
-      .title()
-      .catch(() => '')
-  );
-
-  // ----------------------------------------------------------
-  // 11. KIỂM TRA LOGIN
-  // ----------------------------------------------------------
-
   const visiblePassword =
     await page
       .locator(
@@ -538,33 +340,6 @@ async function login(page, username, password) {
       .catch(() => false);
 
   if (visiblePassword) {
-    const bodyText =
-      norm(
-        await page
-          .locator('body')
-          .innerText()
-          .catch(() => '')
-      );
-
-    if (
-      bodyText.includes(
-        'sai mat khau'
-      ) ||
-      bodyText.includes(
-        'mat khau khong dung'
-      ) ||
-      bodyText.includes(
-        'tai khoan khong dung'
-      ) ||
-      bodyText.includes(
-        'dang nhap that bai'
-      )
-    ) {
-      throw new Error(
-        'Sai tài khoản hoặc mật khẩu HueLMS.'
-      );
-    }
-
     throw new Error(
       'HueLMS vẫn ở trang đăng nhập. URL: ' +
       page.url()
@@ -577,12 +352,12 @@ async function login(page, username, password) {
 }
 
 // ============================================================
-// OPEN PROGRESS PAGE
+// FIND /student/ep/{ID}
 // ============================================================
 
 async function openProgressPage(page) {
   console.log(
-    '[PROGRESS] Chờ HueLMS chuyển sang trang chi tiết...'
+    '[PROGRESS] Tìm ID trang chi tiết...'
   );
 
   console.log(
@@ -590,15 +365,14 @@ async function openProgressPage(page) {
     page.url()
   );
 
-  // ----------------------------------------------------------
-  // 1. ĐÃ Ở ĐÚNG URL
-  // ----------------------------------------------------------
+  const currentMatch =
+    page
+      .url()
+      .match(
+        /\/student\/ep\/(\d+)/
+      );
 
-  if (
-    /\/student\/ep\/\d+\/?$/.test(
-      page.url()
-    )
-  ) {
+  if (currentMatch) {
     console.log(
       '[PROGRESS] Đã ở đúng trang chi tiết:',
       page.url()
@@ -607,76 +381,295 @@ async function openProgressPage(page) {
     return;
   }
 
+  let epId = null;
+
   // ----------------------------------------------------------
-  // 2. NẾU Ở /student/ep, CHỜ REDIRECT
+  // 1. HTML
   // ----------------------------------------------------------
 
-  if (
-    /\/student\/ep\/?$/.test(
-      page.url()
-    )
-  ) {
+  try {
+    const html =
+      await page.content();
+
+    const match =
+      html.match(
+        /\/student\/ep\/(\d+)/
+      );
+
+    if (match) {
+      epId = match[1];
+
+      console.log(
+        '[PROGRESS] Tìm thấy ID trong HTML:',
+        epId
+      );
+    }
+  } catch (_) { }
+
+  // ----------------------------------------------------------
+  // 2. HREF
+  // ----------------------------------------------------------
+
+  if (!epId) {
+    try {
+      const hrefs =
+        await page
+          .locator('a[href]')
+          .evaluateAll(elements =>
+            elements.map(
+              el => el.href || ''
+            )
+          );
+
+      for (const href of hrefs) {
+        const match =
+          String(href).match(
+            /\/student\/ep\/(\d+)/
+          );
+
+        if (match) {
+          epId = match[1];
+
+          console.log(
+            '[PROGRESS] Tìm thấy ID trong href:',
+            epId
+          );
+
+          break;
+        }
+      }
+    } catch (_) { }
+  }
+
+  // ----------------------------------------------------------
+  // 3. PERFORMANCE RESOURCE
+  // ----------------------------------------------------------
+
+  if (!epId) {
+    try {
+      const resources =
+        await page.evaluate(() =>
+          performance
+            .getEntriesByType('resource')
+            .map(
+              item => item.name
+            )
+        );
+
+      for (const resource of resources) {
+        const match =
+          String(resource).match(
+            /\/student\/ep\/(\d+)/
+          );
+
+        if (match) {
+          epId = match[1];
+
+          console.log(
+            '[PROGRESS] Tìm thấy ID trong resource:',
+            epId
+          );
+
+          break;
+        }
+      }
+    } catch (_) { }
+  }
+
+  // ----------------------------------------------------------
+  // 4. STORAGE
+  // ----------------------------------------------------------
+
+  if (!epId) {
+    try {
+      const storage =
+        await page.evaluate(() => {
+          const result = {};
+
+          for (
+            let i = 0;
+            i < localStorage.length;
+            i++
+          ) {
+            const key =
+              localStorage.key(i);
+
+            result[
+              'local:' + key
+            ] =
+              localStorage.getItem(key);
+          }
+
+          for (
+            let i = 0;
+            i < sessionStorage.length;
+            i++
+          ) {
+            const key =
+              sessionStorage.key(i);
+
+            result[
+              'session:' + key
+            ] =
+              sessionStorage.getItem(key);
+          }
+
+          return result;
+        });
+
+      const match =
+        JSON.stringify(storage)
+          .match(
+            /\/student\/ep\/(\d+)/
+          );
+
+      if (match) {
+        epId = match[1];
+
+        console.log(
+          '[PROGRESS] Tìm thấy ID trong storage:',
+          epId
+        );
+      }
+    } catch (_) { }
+  }
+
+  // ----------------------------------------------------------
+  // 5. NGHE NETWORK TRONG 5 GIÂY
+  // ----------------------------------------------------------
+
+  if (!epId) {
     console.log(
-      '[PROGRESS] Đang ở /student/ep, chờ redirect...'
+      '[PROGRESS] Chưa thấy ID, nghe network trong 5 giây...'
     );
 
-    try {
-      await page.waitForURL(
-        url =>
-          /\/student\/ep\/\d+\/?$/.test(
-            url.toString()
-          ),
-        {
-          timeout: 20000
-        }
-      );
+    let networkId = null;
+
+    const detect = url => {
+      const match =
+        String(url || '').match(
+          /\/student\/ep\/(\d+)/
+        );
+
+      if (match) {
+        networkId = match[1];
+      }
+    };
+
+    const onRequest =
+      request => {
+        detect(request.url());
+      };
+
+    const onResponse =
+      response => {
+        detect(response.url());
+      };
+
+    page.on(
+      'request',
+      onRequest
+    );
+
+    page.on(
+      'response',
+      onResponse
+    );
+
+    await page.waitForTimeout(
+      5000
+    );
+
+    page.off(
+      'request',
+      onRequest
+    );
+
+    page.off(
+      'response',
+      onResponse
+    );
+
+    if (networkId) {
+      epId = networkId;
 
       console.log(
-        '[PROGRESS] Redirect thành công:',
-        page.url()
-      );
-
-      await page
-        .waitForLoadState(
-          'domcontentloaded'
-        )
-        .catch(() => { });
-
-      await page.waitForTimeout(
-        1000
-      );
-
-      return;
-    } catch (_) {
-      console.log(
-        '[PROGRESS] Chưa redirect sau 20 giây.'
+        '[PROGRESS] Tìm thấy ID từ network:',
+        epId
       );
     }
   }
 
   // ----------------------------------------------------------
-  // 3. CHỜ THÊM JS
+  // 6. NẾU TRONG 5 GIÂY TỰ REDIRECT THÌ NHẬN LUÔN
   // ----------------------------------------------------------
 
-  await page.waitForTimeout(
-    4000
-  );
+  if (!epId) {
+    const redirectMatch =
+      page
+        .url()
+        .match(
+          /\/student\/ep\/(\d+)/
+        );
 
-  if (
-    /\/student\/ep\/\d+\/?$/.test(
-      page.url()
-    )
-  ) {
+    if (redirectMatch) {
+      epId = redirectMatch[1];
+
+      console.log(
+        '[PROGRESS] Tự redirect được ID:',
+        epId
+      );
+    }
+  }
+
+  // ----------------------------------------------------------
+  // 7. MỞ TRỰC TIẾP
+  // ----------------------------------------------------------
+
+  if (epId) {
+    const target =
+      `${BASE_URL}/student/ep/${epId}`;
+
     console.log(
-      '[PROGRESS] Redirect chậm nhưng thành công:',
+      '[PROGRESS] Mở trực tiếp:',
+      target
+    );
+
+    await page.goto(
+      target,
+      {
+        waitUntil:
+          'domcontentloaded',
+
+        timeout:
+          60000
+      }
+    );
+
+    await page.waitForTimeout(
+      1200
+    );
+
+    console.log(
+      '[PROGRESS] URL sau khi mở:',
       page.url()
     );
 
-    return;
+    if (
+      /\/student\/ep\/\d+\/?$/.test(
+        page.url()
+      )
+    ) {
+      console.log(
+        '[PROGRESS] Vào trang chi tiết thành công.'
+      );
+
+      return;
+    }
   }
 
   throw new Error(
-    'HueLMS đăng nhập thành công nhưng không chuyển được sang trang chi tiết tiến độ. URL hiện tại: ' +
+    'Đăng nhập HueLMS thành công nhưng chưa xác định được ID trang /student/ep/{ID}. URL hiện tại: ' +
     page.url()
   );
 }
@@ -698,10 +691,6 @@ async function scrapeProgress(page) {
   await page.waitForTimeout(
     1000
   );
-
-  // ----------------------------------------------------------
-  // ĐỌC TẤT CẢ TABLE
-  // ----------------------------------------------------------
 
   const tables =
     await page
@@ -736,52 +725,29 @@ async function scrapeProgress(page) {
       )
       .catch(() => []);
 
-  console.log(
-    '[SCRAPE] Số bảng:',
-    tables.length
-  );
-
   const scores = {
     ethics: 0,
-
     drivingTechnique: 0,
-
     vehicleStructure: 0,
-
     trafficLaw: 0,
-
     pl1: 0,
-
     pl2: 0,
-
     pl3: 0,
-
     simulation: 0
   };
 
   const passed = {
     ethics: false,
-
     drivingTechnique: false,
-
     vehicleStructure: false,
-
     trafficLaw: false,
-
     pl1: false,
-
     pl2: false,
-
     pl3: false,
-
     simulation: false
   };
 
-  // ----------------------------------------------------------
-  // HÀM GHI NHẬN
-  // ----------------------------------------------------------
-
-  function assignProgress(
+  function assign(
     rowText,
     percent,
     isPassed
@@ -800,12 +766,8 @@ async function scrapeProgress(page) {
         'pccc'
       )
     ) {
-      scores.ethics =
-        percent;
-
-      passed.ethics =
-        isPassed;
-
+      scores.ethics = percent;
+      passed.ethics = isPassed;
       return;
     }
 
@@ -870,12 +832,8 @@ async function scrapeProgress(page) {
         'pl1'
       )
     ) {
-      scores.pl1 =
-        percent;
-
-      passed.pl1 =
-        isPassed;
-
+      scores.pl1 = percent;
+      passed.pl1 = isPassed;
       return;
     }
 
@@ -887,12 +845,8 @@ async function scrapeProgress(page) {
         'pl2'
       )
     ) {
-      scores.pl2 =
-        percent;
-
-      passed.pl2 =
-        isPassed;
-
+      scores.pl2 = percent;
+      passed.pl2 = isPassed;
       return;
     }
 
@@ -904,12 +858,8 @@ async function scrapeProgress(page) {
         'pl3'
       )
     ) {
-      scores.pl3 =
-        percent;
-
-      passed.pl3 =
-        isPassed;
-
+      scores.pl3 = percent;
+      passed.pl3 = isPassed;
       return;
     }
 
@@ -929,10 +879,6 @@ async function scrapeProgress(page) {
     }
   }
 
-  // ----------------------------------------------------------
-  // DUYỆT BẢNG
-  // ----------------------------------------------------------
-
   for (const table of tables) {
     for (const cells of table) {
       if (!cells.length) {
@@ -949,22 +895,19 @@ async function scrapeProgress(page) {
         parsePercent(fullText);
 
       /*
-       * Chỉ dùng bảng có %
-       * để tránh lấy nhầm "Bảng điểm khóa học".
+       * Chỉ nhận dòng có %.
+       * Nhờ vậy không lấy nhầm bảng điểm phía dưới.
        */
       if (percent === null) {
         continue;
       }
 
       const isPassed =
-        rowText.includes(
-          ' dat'
-        ) ||
-        rowText.endsWith(
-          'dat'
-        );
+        rowText
+          .split(' ')
+          .includes('dat');
 
-      assignProgress(
+      assign(
         rowText,
         percent,
         isPassed
@@ -972,39 +915,13 @@ async function scrapeProgress(page) {
     }
   }
 
-  // ----------------------------------------------------------
-  // XÁC ĐỊNH TRẠNG THÁI
-  // ----------------------------------------------------------
-
-  const progressValues = [
-    scores.ethics,
-
-    scores.drivingTechnique,
-
-    scores.vehicleStructure,
-
-    scores.trafficLaw,
-
-    scores.simulation
-  ];
-
   const anyProgress =
-    progressValues.some(
-      value =>
-        Number(value) > 0
-    );
+    Object.values(scores)
+      .some(
+        value =>
+          Number(value) > 0
+      );
 
-  /*
-   * Không ép tất cả phải 100%.
-   * Ưu tiên trạng thái "Đạt" mà HueLMS hiển thị.
-   *
-   * 5 nhóm chính:
-   * - Đạo đức
-   * - Kỹ thuật
-   * - Cấu tạo
-   * - Pháp luật
-   * - Mô phỏng
-   */
   const mainPassed = [
     passed.ethics,
     passed.drivingTechnique,
@@ -1029,16 +946,11 @@ async function scrapeProgress(page) {
 
   const result = {
     scores,
-
     passed,
-
-    status,
-
     completed,
-
+    status,
     sourceUrl:
       page.url(),
-
     syncedAt:
       new Date().toISOString()
   };
@@ -1125,25 +1037,18 @@ async function syncStudent(
 
     return {
       ...student,
-
       scores:
         progress.scores,
-
       passed:
         progress.passed,
-
-      status:
-        progress.status,
-
       completed:
         progress.completed,
-
+      status:
+        progress.status,
       sourceUrl:
         progress.sourceUrl,
-
       syncedAt:
         progress.syncedAt,
-
       error: ''
     };
   } catch (error) {
@@ -1155,23 +1060,14 @@ async function syncStudent(
 
     return {
       ...student,
-
       scores: {},
-
       passed: {},
-
+      completed: false,
       status:
         'Lỗi đồng bộ',
-
-      completed:
-        false,
-
       error:
-        error &&
-          error.message
-          ? error.message
-          : String(error),
-
+        error.message ||
+        String(error),
       syncedAt:
         new Date().toISOString()
     };
@@ -1183,7 +1079,7 @@ async function syncStudent(
 }
 
 // ============================================================
-// CALLBACK APPS SCRIPT
+// CALLBACK
 // ============================================================
 
 async function callback(
@@ -1191,12 +1087,6 @@ async function callback(
   jobId,
   result
 ) {
-  if (!url) {
-    throw new Error(
-      'Thiếu callbackUrl'
-    );
-  }
-
   const body =
     new URLSearchParams();
 
@@ -1205,12 +1095,9 @@ async function callback(
     JSON.stringify({
       action:
         'theory.workerCallback',
-
       secret:
         SECRET,
-
       jobId,
-
       result
     })
   );
@@ -1246,8 +1133,6 @@ async function callback(
       `Callback HTTP ${response.status}: ${text.slice(0, 300)}`
     );
   }
-
-  return text;
 }
 
 // ============================================================
@@ -1260,16 +1145,12 @@ async function runJob(job) {
   try {
     if (!DEFAULT_PASSWORD) {
       throw new Error(
-        'Thiếu HUELMS_DEFAULT_PASSWORD trên worker.'
+        'Thiếu HUELMS_DEFAULT_PASSWORD.'
       );
     }
 
     console.log(
       `[JOB] Bắt đầu job ${job.id}`
-    );
-
-    console.log(
-      `[JOB] Tổng học viên: ${job.students.length}`
     );
 
     browser =
@@ -1278,11 +1159,8 @@ async function runJob(job) {
 
         args: [
           '--no-sandbox',
-
           '--disable-setuid-sandbox',
-
           '--disable-dev-shm-usage',
-
           '--disable-gpu'
         ]
       });
@@ -1313,16 +1191,11 @@ async function runJob(job) {
           job.id,
           result
         );
-      } catch (
-      callbackError
-      ) {
+      } catch (error) {
         console.error(
           '[CALLBACK] Lỗi:',
-          callbackError.message
+          error.message
         );
-
-        result.callbackError =
-          callbackError.message;
       }
 
       job.processed =
@@ -1354,7 +1227,7 @@ async function runJob(job) {
     );
   } catch (error) {
     console.error(
-      `[JOB] Lỗi job ${job.id}:`,
+      `[JOB] Lỗi:`,
       error.stack ||
       error.message
     );
@@ -1381,288 +1254,208 @@ async function runJob(job) {
 // HEALTH
 // ============================================================
 
-app.get(
-  '/',
-  (req, res) => {
-    res.json({
-      ok: true,
+app.get('/', (req, res) => {
+  res.json({
+    ok: true,
+    service:
+      'huelms-sync'
+  });
+});
 
-      service:
-        'huelms-sync'
-    });
-  }
-);
-
-app.get(
-  '/health',
-  (req, res) => {
-    res.json({
-      ok: true,
-
-      service:
-        'huelms-sync',
-
-      time:
-        new Date().toISOString()
-    });
-  }
-);
+app.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    service:
+      'huelms-sync',
+    time:
+      new Date().toISOString()
+  });
+});
 
 // ============================================================
 // POST /jobs
 // ============================================================
 
-app.post(
-  '/jobs',
-  (req, res) => {
-    try {
-      assertSecret(
-        req.body.secret
+app.post('/jobs', (req, res) => {
+  try {
+    assertSecret(
+      req.body.secret
+    );
+
+    if (!req.body.callbackUrl) {
+      return res
+        .status(400)
+        .json({
+          error:
+            'Thiếu callbackUrl'
+        });
+    }
+
+    const students =
+      Array.isArray(
+        req.body.students
+      )
+        ? req.body.students.filter(
+          student =>
+            student &&
+            student.cccd
+        )
+        : [];
+
+    if (!students.length) {
+      return res
+        .status(400)
+        .json({
+          error:
+            'Không có học viên hợp lệ'
+        });
+    }
+
+    if (students.length > 20) {
+      return res
+        .status(400)
+        .json({
+          error:
+            'Tối đa 20 học viên/lần'
+        });
+    }
+
+    const id =
+      crypto.randomUUID();
+
+    const delayMs =
+      Math.max(
+        1200,
+        Math.min(
+          5000,
+          Number(
+            req.body.delayMs ||
+            1800
+          )
+        )
       );
 
-      if (
-        !req.body.callbackUrl
-      ) {
-        return res
-          .status(400)
-          .json({
-            error:
-              'Thiếu callbackUrl'
-          });
-      }
+    const job = {
+      id,
+      status:
+        'queued',
+      processed: 0,
+      errors: 0,
+      total:
+        students.length,
+      students,
+      callbackUrl:
+        req.body.callbackUrl,
+      delayMs,
+      createdAt:
+        new Date().toISOString(),
+      finishedAt: '',
+      error: ''
+    };
 
-      const students =
-        Array.isArray(
-          req.body.students
-        )
-          ? req.body.students.filter(
-            student =>
-              student &&
-              student.cccd
-          )
-          : [];
+    jobs.set(id, job);
 
-      if (
-        !students.length
-      ) {
-        return res
-          .status(400)
-          .json({
-            error:
-              'Không có học viên hợp lệ'
-          });
-      }
+    console.log(
+      `[POST /jobs] Tạo job ${id}`
+    );
 
-      if (
-        students.length > 20
-      ) {
-        return res
-          .status(400)
-          .json({
-            error:
-              'Chế độ bán tự động hỗ trợ tối đa 20 học viên/lần'
-          });
-      }
+    setImmediate(
+      () =>
+        runJob(job)
+    );
 
-      const id =
-        crypto.randomUUID();
-
-      const delayMs =
-        Math.max(
-          1200,
-          Math.min(
-            5000,
-            Number(
-              req.body.delayMs ||
-              1800
-            )
-          )
-        );
-
-      const job = {
-        id,
-
-        status:
-          'queued',
-
-        processed:
-          0,
-
-        errors:
-          0,
-
+    return res
+      .status(202)
+      .json({
+        jobId:
+          id,
         total:
           students.length,
+        status:
+          'queued'
+      });
+  } catch (error) {
+    console.error(
+      '[POST /jobs] Lỗi:',
+      error.message
+    );
 
-        students,
-
-        callbackUrl:
-          req.body.callbackUrl,
-
-        delayMs,
-
-        createdAt:
-          new Date().toISOString(),
-
-        finishedAt:
-          '',
-
-        error:
-          ''
-      };
-
-      jobs.set(
-        id,
-        job
-      );
-
-      console.log(
-        `[POST /jobs] Tạo job ${id}`
-      );
-
-      console.log(
-        `[POST /jobs] ${students.length} học viên`
-      );
-
-      setImmediate(
-        () =>
-          runJob(job)
-      );
-
-      return res
-        .status(202)
-        .json({
-          jobId:
-            id,
-
-          total:
-            students.length,
-
-          status:
-            'queued'
-        });
-    } catch (error) {
-      console.error(
-        '[POST /jobs] Lỗi:',
-        error.message
-      );
-
-      const statusCode =
+    return res
+      .status(
         error.message ===
           'UNAUTHORIZED'
           ? 401
-          : 500;
-
-      return res
-        .status(statusCode)
-        .json({
-          error:
-            error.message ||
-            String(error)
-        });
-    }
+          : 500
+      )
+      .json({
+        error:
+          error.message ||
+          String(error)
+      });
   }
-);
+});
 
 // ============================================================
 // GET /jobs/:id
 // ============================================================
 
-app.get(
-  '/jobs/:id',
-  (req, res) => {
-    try {
-      assertSecret(
-        String(
-          req.get(
-            'X-Theory-Secret'
-          ) || ''
-        )
+app.get('/jobs/:id', (req, res) => {
+  try {
+    assertSecret(
+      String(
+        req.get(
+          'X-Theory-Secret'
+        ) || ''
+      )
+    );
+
+    const job =
+      jobs.get(
+        req.params.id
       );
 
-      const job =
-        jobs.get(
-          req.params.id
-        );
+    if (!job) {
+      return res
+        .status(404)
+        .json({
+          error:
+            'Không tìm thấy job'
+        });
+    }
 
-      if (!job) {
-        return res
-          .status(404)
-          .json({
-            error:
-              'Không tìm thấy job'
-          });
-      }
-
-      return res.json({
-        id:
-          job.id,
-
-        status:
-          job.status,
-
-        processed:
-          job.processed,
-
-        total:
-          job.total,
-
-        errors:
-          job.errors,
-
-        error:
-          job.error || '',
-
-        createdAt:
-          job.createdAt,
-
-        finishedAt:
-          job.finishedAt || ''
-      });
-    } catch (error) {
-      const statusCode =
+    return res.json({
+      id:
+        job.id,
+      status:
+        job.status,
+      processed:
+        job.processed,
+      total:
+        job.total,
+      errors:
+        job.errors,
+      error:
+        job.error || '',
+      createdAt:
+        job.createdAt,
+      finishedAt:
+        job.finishedAt || ''
+    });
+  } catch (error) {
+    return res
+      .status(
         error.message ===
           'UNAUTHORIZED'
           ? 401
-          : 500;
-
-      return res
-        .status(statusCode)
-        .json({
-          error:
-            error.message ||
-            String(error)
-        });
-    }
-  }
-);
-
-// ============================================================
-// EXPRESS ERROR
-// ============================================================
-
-app.use(
-  (
-    error,
-    req,
-    res,
-    next
-  ) => {
-    console.error(
-      '[SERVER ERROR]',
-      error.stack ||
-      error.message
-    );
-
-    res
-      .status(500)
+          : 500
+      )
       .json({
         error:
           error.message ||
-          'Internal Server Error'
+          String(error)
       });
   }
-);
+});
 
 // ============================================================
 // START
