@@ -484,320 +484,169 @@ async function scrapeProgress(page) {
     throw new Error('HueLMS đã logout trước khi đọc được tiến độ.');
   }
 
-  const scores = {
-    ethics: 0,
-    drivingTechnique: 0,
-    vehicleStructure: 0,
-    trafficLaw: 0,
-    pl1: 0,
-    pl2: 0,
-    pl3: 0,
-    simulation: 0
-  };
-
-  const passed = {
-    ethics: false,
-    drivingTechnique: false,
-    vehicleStructure: false,
-    trafficLaw: false,
-    pl1: false,
-    pl2: false,
-    pl3: false,
-    simulation: false
-  };
-
+  const scores = { ethics: 0, drivingTechnique: 0, vehicleStructure: 0, trafficLaw: 0, pl1: 0, pl2: 0, pl3: 0, simulation: 0 };
+  const passed = { ethics: false, drivingTechnique: false, vehicleStructure: false, trafficLaw: false, pl1: false, pl2: false, pl3: false, simulation: false };
   const found = new Set();
 
   function identifyKey(label) {
     const name = norm(label);
+    // Môn con phải nhận diện trước môn cha để tránh text của hàng cha chứa cả các hàng con.
+    if (name.includes('phan 1') || /(^|\s)pl1(\s|$)/.test(name)) return 'pl1';
+    if (name.includes('phan 2') || /(^|\s)pl2(\s|$)/.test(name)) return 'pl2';
+    if (name.includes('phan 3') || /(^|\s)pl3(\s|$)/.test(name)) return 'pl3';
     if (name.includes('dao duc nguoi lai xe') || name.includes('dao duc') || name.includes('vhgt') || name.includes('pccc')) return 'ethics';
     if (name.includes('ky thuat lai xe')) return 'drivingTechnique';
     if (name.includes('cau tao sua chua') || (name.includes('cau tao') && name.includes('sua chua'))) return 'vehicleStructure';
     if (name.includes('phap luat giao thong duong bo') || name.includes('phap luat gtdb')) return 'trafficLaw';
-    if (name.includes('phan 1') || /^pl1\b/.test(name)) return 'pl1';
-    if (name.includes('phan 2') || /^pl2\b/.test(name)) return 'pl2';
-    if (name.includes('phan 3') || /^pl3\b/.test(name)) return 'pl3';
     if (name.includes('mo phong cac tinh huong giao thong') || name.includes('mo phong')) return 'simulation';
     return null;
   }
 
-  function record(key, percent, rowText) {
-    if (!key || percent === null || !Number.isFinite(Number(percent))) return;
-    scores[key] = Number(percent);
-    passed[key] = /(^|\s)dat($|\s)/.test(norm(rowText));
+  function record(key, percent, text) {
+    const n = Number(percent);
+    if (!key || !Number.isFinite(n) || n < 0 || n > 100) return false;
+    scores[key] = n;
+    passed[key] = /(^|\s)dat($|\s)/.test(norm(text));
     found.add(key);
-    console.log(`[SCRAPE] ${key} = ${scores[key]}% | đạt=${passed[key]}`);
+    console.log(`[SCRAPE] ${key} = ${n}% | đạt=${passed[key]}`);
+    return true;
   }
 
-  // HueLMS/Render đôi khi đã đổi URL sang /student/ep/{ID} nhưng DOM còn trắng vài giây.
-  // Chờ nội dung thật xuất hiện thay vì đọc ngay và nhận 0 ký tự.
-  let pageText = '';
-  let readyRows = [];
-  const waitStarted = Date.now();
-  const WAIT_MS = 12000;
-
-  while (Date.now() - waitStarted < WAIT_MS) {
-    if (/\/user\/login/i.test(page.url())) {
-      throw new Error('HueLMS đã logout trong lúc chờ tải nội dung tiến độ.');
+  // HueLMS có thể render bảng muộn. Thử tối đa 3 vòng; vòng sau reload trang chi tiết.
+  for (let attempt = 1; attempt <= 3 && found.size < 8; attempt++) {
+    if (attempt > 1) {
+      console.log(`[SCRAPE] Thử lại lần ${attempt}/3...`);
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => { });
     }
 
-    // Đọc row trực tiếp nếu bảng đã render.
-    try {
-      readyRows = await page.locator('tr').evaluateAll(elements =>
-        elements.map(tr => {
-          const cells = Array.from(tr.querySelectorAll('th,td')).map(td =>
-            (td.innerText || td.textContent || '').replace(/\s+/g, ' ').trim()
-          );
-          return {
-            cells,
-            text: (tr.innerText || tr.textContent || '').replace(/\s+/g, ' ').trim()
-          };
-        }).filter(row => row.text)
-      );
-    } catch (_) {
-      readyRows = [];
-    }
+    await page.waitForTimeout(attempt === 1 ? 2500 : 4000);
 
-    // Đọc textContent/innerText từ mọi frame. textContent bền hơn innerText trên headless.
-    const texts = [];
+    // Chờ một trong các nhãn thật của bảng xuất hiện trong DOM hiển thị.
+    await page.waitForFunction(() => {
+      const t = (document.body && document.body.innerText || '').toLowerCase();
+      return t.includes('kỹ thuật lái xe') || t.includes('ky thuat lai xe') ||
+        t.includes('pháp luật giao thông') || t.includes('phap luat giao thong') ||
+        t.includes('mô phỏng') || t.includes('mo phong');
+    }, { timeout: 12000 }).catch(() => { });
+
+    // Cách 1: đọc mọi TR ở tất cả frame.
     for (const frame of page.frames()) {
+      let rows = [];
       try {
-        const text = await frame.evaluate(() => {
-          const root = document.documentElement;
-          const body = document.body;
-          return (
-            (body && (body.innerText || body.textContent)) ||
-            (root && (root.innerText || root.textContent)) ||
-            ''
-          );
-        });
-        if (text && String(text).trim()) texts.push(String(text));
+        rows = await frame.locator('tr').evaluateAll(elements => elements.map(tr => ({
+          cells: Array.from(tr.querySelectorAll('th,td')).map(td => (td.innerText || td.textContent || '').replace(/\s+/g, ' ').trim()),
+          text: (tr.innerText || tr.textContent || '').replace(/\s+/g, ' ').trim()
+        })).filter(x => x.text));
       } catch (_) { }
-    }
 
-    pageText = texts.join('\n');
-
-    const normalized = norm(pageText);
-    const hasExpectedContent =
-      readyRows.length > 0 ||
-      normalized.includes('ky thuat lai xe') ||
-      normalized.includes('phap luat giao thong duong bo') ||
-      normalized.includes('mo phong cac tinh huong giao thong');
-
-    if (hasExpectedContent) break;
-
-    await page.waitForTimeout(350);
-  }
-
-  console.log('[SCRAPE] Số row DOM tìm được:', readyRows.length);
-  console.log('[SCRAPE] Độ dài text đọc được:', pageText.length);
-
-  // ----------------------------------------------------------
-  // CÁCH 1: TABLE ROW - chính xác nhất nếu DOM có bảng thật
-  // ----------------------------------------------------------
-  for (const row of readyRows) {
-    const cells = row.cells || [];
-
-    // HueLMS có hàng cha "Pháp luật giao thông đường bộ (3)" với ô expand/collapse
-    // đứng riêng, nên tên môn không phải lúc nào cũng nằm ở cells[0].
-    // Nhận diện bằng toàn bộ text của hàng để không bỏ sót trafficLaw.
-    const label = row.text || cells.join(' ');
-    const key = identifyKey(label);
-    if (!key) continue;
-
-    // Không giả định cột Tiến độ luôn là cells[1].
-    // Tìm ô đầu tiên thực sự có dấu %, ví dụ 76.6%.
-    let percent = null;
-    for (const cell of cells) {
-      const candidate = parsePercent(cell);
-      if (candidate !== null) {
-        percent = candidate;
-        break;
+      console.log(`[SCRAPE] attempt=${attempt} frame=${frame.url()} rows=${rows.length}`);
+      for (const row of rows) {
+        const key = identifyKey(row.text);
+        if (!key || found.has(key)) continue;
+        let percent = null;
+        for (const cell of row.cells || []) {
+          const p = parsePercent(cell);
+          if (p !== null) { percent = p; break; }
+        }
+        if (percent === null) percent = parsePercent(row.text);
+        if (percent !== null) record(key, percent, row.text);
       }
     }
 
-    if (percent === null) percent = parsePercent(row.text);
-    if (percent === null) continue;
-
-    record(key, percent, row.text);
-  }
-
-  // ----------------------------------------------------------
-  // CÁCH 2: TEXT FALLBACK - lấy % đầu tiên ngay sau đúng nhãn môn
-  // Không dùng regex greedy để tránh 76.6% bị cắt thành 6%.
-  // ----------------------------------------------------------
-  if (found.size < 8 && pageText.trim()) {
-    const compact = norm(pageText);
-
-    const labelMap = {
-      ethics: [
-        'dao duc nguoi lai xe',
-        'dao duc',
-        'vhgt',
-        'pccc'
-      ],
-      drivingTechnique: [
-        'ky thuat lai xe o to',
-        'ky thuat lai xe'
-      ],
-      vehicleStructure: [
-        'cau tao sua chua'
-      ],
-      trafficLaw: [
-        'phap luat giao thong duong bo',
-        'phap luat gtdb'
-      ],
-      pl1: [
-        'phan 1.',
-        'phan 1 ',
-        'pl1'
-      ],
-      pl2: [
-        'phan 2.',
-        'phan 2 ',
-        'pl2'
-      ],
-      pl3: [
-        'phan 3.',
-        'phan 3 ',
-        'pl3'
-      ],
-      simulation: [
-        'mo phong cac tinh huong giao thong',
-        'mo phong'
-      ]
-    };
-
-    for (const [key, labels] of Object.entries(labelMap)) {
-      if (found.has(key)) continue;
-
-      let bestIndex = -1;
-      let bestLabel = '';
-
-      for (const label of labels) {
-        const idx = compact.indexOf(label);
-        if (idx >= 0 && (bestIndex < 0 || idx < bestIndex)) {
-          bestIndex = idx;
-          bestLabel = label;
+    // Cách 2: không phụ thuộc table/tr. Tìm các element hiển thị có dấu % rồi đi ngược
+    // lên ancestor gần nhất; cách này hoạt động cả khi HueLMS đổi table thành div/grid.
+    if (found.size < 8) {
+      for (const frame of page.frames()) {
+        let blocks = [];
+        try {
+          blocks = await frame.evaluate(() => {
+            const out = [];
+            const all = Array.from(document.querySelectorAll('body *'));
+            for (const el of all) {
+              const own = (el.innerText || '').replace(/\s+/g, ' ').trim();
+              if (!own || !/\d{1,3}(?:[.,]\d+)?\s*%/.test(own)) continue;
+              // Bỏ container quá lớn; ưu tiên block nhỏ chứa tên môn + phần trăm.
+              if (own.length > 700) continue;
+              const r = el.getBoundingClientRect();
+              if (r.width <= 0 || r.height <= 0) continue;
+              out.push(own);
+            }
+            return Array.from(new Set(out)).sort((a, b) => a.length - b.length).slice(0, 300);
+          });
+        } catch (_) { }
+        for (const text of blocks) {
+          const key = identifyKey(text);
+          if (!key || found.has(key)) continue;
+          const p = parsePercent(text);
+          if (p !== null) record(key, p, text);
         }
       }
-
-      if (bestIndex < 0) continue;
-
-      // Chỉ nhìn một đoạn ngắn ngay sau nhãn để không ăn % của môn kế tiếp.
-      const segment = compact.slice(bestIndex, bestIndex + Math.max(220, bestLabel.length + 180));
-      const percent = parsePercent(segment);
-      if (percent === null) continue;
-
-      record(key, percent, segment);
     }
-  }
 
-  // ----------------------------------------------------------
-  // CÁCH 3: HTML FALLBACK - nếu headless có HTML nhưng textContent chưa ổn
-  // ----------------------------------------------------------
-  if (found.size < 8) {
-    try {
-      const html = await page.content();
-      if (html && html.length > 100) {
-        const stripped = html
-          .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
-          .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/&nbsp;/gi, ' ')
-          .replace(/&amp;/gi, '&')
-          .replace(/\s+/g, ' ');
-
-        const compact = norm(stripped);
-        const labelMap = {
-          ethics: ['dao duc nguoi lai xe', 'dao duc', 'vhgt', 'pccc'],
-          drivingTechnique: ['ky thuat lai xe o to', 'ky thuat lai xe'],
-          vehicleStructure: ['cau tao sua chua'],
-          trafficLaw: ['phap luat giao thong duong bo', 'phap luat gtdb'],
-          pl1: ['phan 1.', 'phan 1 ', 'pl1'],
-          pl2: ['phan 2.', 'phan 2 ', 'pl2'],
-          pl3: ['phan 3.', 'phan 3 ', 'pl3'],
-          simulation: ['mo phong cac tinh huong giao thong', 'mo phong']
-        };
-
-        for (const [key, labels] of Object.entries(labelMap)) {
-          if (found.has(key)) continue;
-          let idx = -1;
-          for (const label of labels) {
-            const current = compact.indexOf(label);
-            if (current >= 0 && (idx < 0 || current < idx)) idx = current;
-          }
-          if (idx < 0) continue;
-
-          const segment = compact.slice(idx, idx + 240);
-          const percent = parsePercent(segment);
-          if (percent === null) continue;
-          record(key, percent, segment);
+    // Cách 3: body.innerText fallback. Cắt từ nhãn hiện tại đến nhãn môn kế tiếp,
+    // rồi lấy % đầu tiên. Không dùng đoạn greedy nên 76.6% không thể thành 6%.
+    if (found.size < 8) {
+      let pageText = '';
+      for (const frame of page.frames()) {
+        try {
+          const t = await frame.locator('body').innerText({ timeout: 3000 });
+          if (t) pageText += '\n' + t;
+        } catch (_) {
+          try {
+            const t = await frame.evaluate(() => document.body ? (document.body.innerText || document.body.textContent || '') : '');
+            if (t) pageText += '\n' + t;
+          } catch (_) { }
         }
       }
-    } catch (error) {
-      console.log('[SCRAPE] HTML fallback lỗi:', error.message);
+      console.log('[SCRAPE] Độ dài body.innerText:', pageText.length);
+      const compact = norm(pageText);
+      const defs = [
+        ['ethics', ['dao duc nguoi lai xe', 'dao duc']],
+        ['drivingTechnique', ['ky thuat lai xe o to', 'ky thuat lai xe']],
+        ['vehicleStructure', ['cau tao sua chua']],
+        ['trafficLaw', ['phap luat giao thong duong bo', 'phap luat gtdb']],
+        ['pl1', ['phan 1.', 'phan 1 ', 'pl1']],
+        ['pl2', ['phan 2.', 'phan 2 ', 'pl2']],
+        ['pl3', ['phan 3.', 'phan 3 ', 'pl3']],
+        ['simulation', ['mo phong cac tinh huong giao thong', 'mo phong']]
+      ];
+      const positions = [];
+      for (const [key, labels] of defs) {
+        for (const label of labels) {
+          const i = compact.indexOf(label);
+          if (i >= 0) { positions.push({ key, i, label }); break; }
+        }
+      }
+      positions.sort((a, b) => a.i - b.i);
+      for (let i = 0; i < positions.length; i++) {
+        const cur = positions[i];
+        if (found.has(cur.key)) continue;
+        const end = i + 1 < positions.length ? positions[i + 1].i : Math.min(compact.length, cur.i + 500);
+        const segment = compact.slice(cur.i, Math.max(cur.i + 120, end));
+        const p = parsePercent(segment);
+        if (p !== null) record(cur.key, p, segment);
+      }
     }
+
+    console.log(`[SCRAPE] Sau attempt ${attempt}: ${found.size}/8`);
   }
 
+  const requiredKeys = ['ethics', 'drivingTechnique', 'vehicleStructure', 'trafficLaw', 'pl1', 'pl2', 'pl3', 'simulation'];
+  const missing = requiredKeys.filter(k => !found.has(k));
   console.log('[SCRAPE] Số mục đọc được:', found.size, '/8');
 
-  // Không ghi đè Google Sheets nếu trang chưa tải xong hoặc scrape thất bại.
-  if (found.size === 0) {
-    throw new Error(
-      'Không đọc được nội dung trang tiến độ HueLMS sau khi chờ tải. Không ghi đè dữ liệu 0.'
-    );
-  }
-
-  const requiredKeys = [
-    'ethics',
-    'drivingTechnique',
-    'vehicleStructure',
-    'trafficLaw',
-    'pl1',
-    'pl2',
-    'pl3',
-    'simulation'
-  ];
-
-  const missing = requiredKeys.filter(key => !found.has(key));
   if (missing.length) {
-    throw new Error(
-      'Đọc tiến độ chưa đầy đủ, còn thiếu: ' + missing.join(', ') + '. Không ghi đè Google Sheets.'
-    );
+    throw new Error('Đọc tiến độ chưa đầy đủ, còn thiếu: ' + missing.join(', ') + '. Không ghi đè Google Sheets.');
   }
 
   const anyProgress = Object.values(scores).some(v => Number(v) > 0);
-
-  const completed = [
-    passed.ethics,
-    passed.drivingTechnique,
-    passed.vehicleStructure,
-    passed.trafficLaw,
-    passed.simulation
-  ].every(Boolean);
-
+  const completed = [passed.ethics, passed.drivingTechnique, passed.vehicleStructure, passed.trafficLaw, passed.simulation].every(Boolean);
   const status = completed ? 'Hoàn thành' : (anyProgress ? 'Đang học' : 'Chưa học');
-
   const result = {
-    scores,
-    passed,
-    completed,
-    status,
-    sourceUrl: page.url(),
-    syncedAt: new Date().toISOString(),
-
-    // Alias phẳng để tương thích Apps Script hiện tại.
-    ethics: scores.ethics,
-    drivingTechnique: scores.drivingTechnique,
-    vehicleStructure: scores.vehicleStructure,
-    trafficLaw: scores.trafficLaw,
-    pl1: scores.pl1,
-    pl2: scores.pl2,
-    pl3: scores.pl3,
-    simulation: scores.simulation
+    scores, passed, completed, status, sourceUrl: page.url(), syncedAt: new Date().toISOString(),
+    ethics: scores.ethics, drivingTechnique: scores.drivingTechnique, vehicleStructure: scores.vehicleStructure,
+    trafficLaw: scores.trafficLaw, pl1: scores.pl1, pl2: scores.pl2, pl3: scores.pl3, simulation: scores.simulation
   };
-
   console.log('[SCRAPE] Kết quả cuối:', JSON.stringify(result));
   return result;
 }
