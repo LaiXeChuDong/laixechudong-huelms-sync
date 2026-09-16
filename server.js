@@ -679,51 +679,26 @@ async function openProgressPage(page) {
 // ============================================================
 
 async function scrapeProgress(page) {
-  console.log(
-    '[SCRAPE] Đọc tiến độ HueLMS...'
-  );
+  console.log('[SCRAPE] Đọc tiến độ HueLMS...');
+  console.log('[SCRAPE] URL:', page.url());
 
-  console.log(
-    '[SCRAPE] URL:',
-    page.url()
-  );
+  await page.waitForLoadState('domcontentloaded').catch(() => { });
+  await page.waitForTimeout(1200);
 
-  await page.waitForTimeout(
-    1000
-  );
+  // Chờ đúng bảng "Lớp học" xuất hiện. HueLMS có thêm bảng "Bảng điểm khóa học"
+  // ở phía dưới, vì vậy không đọc toàn bộ trang bằng một regex chung.
+  await page.locator('table').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => { });
 
-  const tables =
-    await page
-      .locator('table')
-      .evaluateAll(tables =>
-        tables.map(table =>
-          Array.from(
-            table.querySelectorAll(
-              'tr'
-            )
-          ).map(tr =>
-            Array.from(
-              tr.querySelectorAll(
-                'th,td'
-              )
-            )
-              .map(td =>
-                (
-                  td.innerText ||
-                  td.textContent ||
-                  ''
-                )
-                  .replace(
-                    /\s+/g,
-                    ' '
-                  )
-                  .trim()
-              )
-              .filter(Boolean)
-          )
-        )
-      )
-      .catch(() => []);
+  const rows = await page.locator('table tr').evaluateAll(elements =>
+    elements.map(tr => {
+      const cells = Array.from(tr.querySelectorAll('th,td')).map(td =>
+        (td.innerText || td.textContent || '').replace(/\s+/g, ' ').trim()
+      );
+      return { cells, text: cells.join(' ') };
+    }).filter(row => row.cells.length)
+  ).catch(() => []);
+
+  console.log('[SCRAPE] Số dòng bảng tìm được:', rows.length);
 
   const scores = {
     ethics: 0,
@@ -747,219 +722,91 @@ async function scrapeProgress(page) {
     simulation: false
   };
 
-  function assign(
-    rowText,
-    percent,
-    isPassed
-  ) {
-    if (
-      rowText.includes(
-        'dao duc nguoi lai xe'
-      ) ||
-      rowText.includes(
-        'dao duc'
-      ) ||
-      rowText.includes(
-        'vhgt'
-      ) ||
-      rowText.includes(
-        'pccc'
-      )
-    ) {
-      scores.ethics = percent;
-      passed.ethics = isPassed;
-      return;
+  function setValue(key, percent, rowText) {
+    if (percent === null || percent === undefined || !Number.isFinite(Number(percent))) return;
+    scores[key] = Number(percent);
+    passed[key] = /(^|\s)dat($|\s)/.test(norm(rowText));
+  }
+
+  for (const row of rows) {
+    const cells = row.cells || [];
+    if (cells.length < 2) continue;
+
+    const name = norm(cells[0]);
+    const rowText = norm(row.text);
+
+    // Cột 2 của bảng Lớp học là "Tiến độ". Ưu tiên đọc trực tiếp cột này.
+    // Nếu DOM thay đổi thì mới fallback sang toàn bộ dòng.
+    let percent = parsePercent(cells[1]);
+    if (percent === null) percent = parsePercent(row.text);
+    if (percent === null) continue;
+
+    console.log('[SCRAPE] Dòng:', JSON.stringify(cells), '=>', percent);
+
+    if (name.includes('dao duc nguoi lai xe') || name.includes('dao duc') || name.includes('vhgt') || name.includes('pccc')) {
+      setValue('ethics', percent, rowText);
+      continue;
     }
-
-    if (
-      rowText.includes(
-        'ky thuat lai xe'
-      )
-    ) {
-      scores.drivingTechnique =
-        percent;
-
-      passed.drivingTechnique =
-        isPassed;
-
-      return;
+    if (name.includes('ky thuat lai xe')) {
+      setValue('drivingTechnique', percent, rowText);
+      continue;
     }
-
-    if (
-      rowText.includes(
-        'cau tao sua chua'
-      ) ||
-      (
-        rowText.includes(
-          'cau tao'
-        ) &&
-        rowText.includes(
-          'sua chua'
-        )
-      )
-    ) {
-      scores.vehicleStructure =
-        percent;
-
-      passed.vehicleStructure =
-        isPassed;
-
-      return;
+    if (name.includes('cau tao sua chua') || (name.includes('cau tao') && name.includes('sua chua'))) {
+      setValue('vehicleStructure', percent, rowText);
+      continue;
     }
-
-    if (
-      rowText.includes(
-        'phap luat giao thong duong bo'
-      ) ||
-      rowText.includes(
-        'phap luat gtdb'
-      )
-    ) {
-      scores.trafficLaw =
-        percent;
-
-      passed.trafficLaw =
-        isPassed;
-
-      return;
+    if (name.includes('phap luat giao thong duong bo') || name.includes('phap luat gtdb')) {
+      setValue('trafficLaw', percent, rowText);
+      continue;
     }
-
-    if (
-      rowText.includes(
-        'phan 1'
-      ) ||
-      rowText.includes(
-        'pl1'
-      )
-    ) {
-      scores.pl1 = percent;
-      passed.pl1 = isPassed;
-      return;
+    if (name.includes('phan 1') || /^pl1\b/.test(name)) {
+      setValue('pl1', percent, rowText);
+      continue;
     }
-
-    if (
-      rowText.includes(
-        'phan 2'
-      ) ||
-      rowText.includes(
-        'pl2'
-      )
-    ) {
-      scores.pl2 = percent;
-      passed.pl2 = isPassed;
-      return;
+    if (name.includes('phan 2') || /^pl2\b/.test(name)) {
+      setValue('pl2', percent, rowText);
+      continue;
     }
-
-    if (
-      rowText.includes(
-        'phan 3'
-      ) ||
-      rowText.includes(
-        'pl3'
-      )
-    ) {
-      scores.pl3 = percent;
-      passed.pl3 = isPassed;
-      return;
+    if (name.includes('phan 3') || /^pl3\b/.test(name)) {
+      setValue('pl3', percent, rowText);
+      continue;
     }
-
-    if (
-      rowText.includes(
-        'mo phong cac tinh huong giao thong'
-      ) ||
-      rowText.includes(
-        'mo phong'
-      )
-    ) {
-      scores.simulation =
-        percent;
-
-      passed.simulation =
-        isPassed;
+    if (name.includes('mo phong cac tinh huong giao thong') || name.includes('mo phong')) {
+      setValue('simulation', percent, rowText);
     }
   }
 
-  for (const table of tables) {
-    for (const cells of table) {
-      if (!cells.length) {
-        continue;
-      }
-
-      const fullText =
-        cells.join(' ');
-
-      const rowText =
-        norm(fullText);
-
-      const percent =
-        parsePercent(fullText);
-
-      /*
-       * Chỉ nhận dòng có %.
-       * Nhờ vậy không lấy nhầm bảng điểm phía dưới.
-       */
-      if (percent === null) {
-        continue;
-      }
-
-      const isPassed =
-        rowText
-          .split(' ')
-          .includes('dat');
-
-      assign(
-        rowText,
-        percent,
-        isPassed
-      );
-    }
-  }
-
-  const anyProgress =
-    Object.values(scores)
-      .some(
-        value =>
-          Number(value) > 0
-      );
-
-  const mainPassed = [
+  const anyProgress = Object.values(scores).some(v => Number(v) > 0);
+  const completed = [
     passed.ethics,
     passed.drivingTechnique,
     passed.vehicleStructure,
     passed.trafficLaw,
     passed.simulation
-  ];
+  ].every(Boolean);
 
-  const completed =
-    mainPassed.every(Boolean);
-
-  let status =
-    'Chưa học';
-
-  if (completed) {
-    status =
-      'Hoàn thành';
-  } else if (anyProgress) {
-    status =
-      'Đang học';
-  }
+  const status = completed ? 'Hoàn thành' : (anyProgress ? 'Đang học' : 'Chưa học');
 
   const result = {
     scores,
     passed,
     completed,
     status,
-    sourceUrl:
-      page.url(),
-    syncedAt:
-      new Date().toISOString()
+    sourceUrl: page.url(),
+    syncedAt: new Date().toISOString(),
+
+    // Alias phẳng để tương thích Apps Script cũ nếu callback đang đọc result.ethics...
+    ethics: scores.ethics,
+    drivingTechnique: scores.drivingTechnique,
+    vehicleStructure: scores.vehicleStructure,
+    trafficLaw: scores.trafficLaw,
+    pl1: scores.pl1,
+    pl2: scores.pl2,
+    pl3: scores.pl3,
+    simulation: scores.simulation
   };
 
-  console.log(
-    '[SCRAPE] Kết quả:',
-    JSON.stringify(result)
-  );
-
+  console.log('[SCRAPE] Kết quả:', JSON.stringify(result));
   return result;
 }
 
@@ -1039,6 +886,14 @@ async function syncStudent(
       ...student,
       scores:
         progress.scores,
+      ethics: progress.scores.ethics,
+      drivingTechnique: progress.scores.drivingTechnique,
+      vehicleStructure: progress.scores.vehicleStructure,
+      trafficLaw: progress.scores.trafficLaw,
+      pl1: progress.scores.pl1,
+      pl2: progress.scores.pl2,
+      pl3: progress.scores.pl3,
+      simulation: progress.scores.simulation,
       passed:
         progress.passed,
       completed:
