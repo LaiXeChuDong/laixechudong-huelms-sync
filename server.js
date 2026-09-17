@@ -25,6 +25,18 @@ const DEFAULT_PASSWORD = String(
   process.env.HUELMS_DEFAULT_PASSWORD || ''
 );
 
+// V8 Fast: chạy song song nhiều học viên nhưng mỗi học viên dùng context riêng.
+// Có thể đặt MAX_CONCURRENCY=1 nếu gói Render yếu; mặc định 2 là cân bằng tốt.
+const MAX_CONCURRENCY = Math.max(
+  1,
+  Math.min(4, Number(process.env.MAX_CONCURRENCY || 2))
+);
+
+const FAST_RENDER_TIMEOUT = Math.max(
+  1500,
+  Math.min(8000, Number(process.env.FAST_RENDER_TIMEOUT || 3500))
+);
+
 const jobs = new Map();
 
 // ============================================================
@@ -133,7 +145,7 @@ async function login(page, username, password) {
     timeout: 60000
   });
 
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(250);
 
   console.log(
     '[LOGIN] URL ban đầu:',
@@ -176,7 +188,7 @@ async function login(page, username, password) {
       }
     );
 
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(250);
 
     console.log(
       '[LOGIN] URL form:',
@@ -372,7 +384,7 @@ async function openProgressPage(page) {
   try {
     await page.waitForURL(
       url => /\/student\/ep\/\d+\/?$/.test(url.toString()),
-      { timeout: 7000 }
+      { timeout: 3500 }
     );
   } catch (_) { }
 
@@ -437,7 +449,7 @@ async function openProgressPage(page) {
 
   await page.goto(target, {
     waitUntil: 'domcontentloaded',
-    timeout: 30000
+    timeout: 20000
   });
 
   if (!/\/student\/ep\/\d+\/?$/.test(page.url())) {
@@ -462,7 +474,7 @@ async function ensureProgressSession(page, username, password, progressUrl) {
     console.log('[SESSION] Khôi phục trang tiến độ:', progressUrl);
     await page.goto(progressUrl, {
       waitUntil: 'domcontentloaded',
-      timeout: 30000
+      timeout: 20000
     });
   }
 
@@ -501,7 +513,7 @@ async function scrapeProgress(page, username, password, progressUrl) {
     return null;
   }
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
     await ensureProgressSession(page, username, password, progressUrl);
 
     const scores = { ethics: 0, drivingTechnique: 0, vehicleStructure: 0, trafficLaw: 0, pl1: 0, pl2: 0, pl3: 0, simulation: 0 };
@@ -518,7 +530,7 @@ async function scrapeProgress(page, username, password, progressUrl) {
       return true;
     }
 
-    console.log(`[SCRAPE] attempt ${attempt}/3 trên ${page.url()}`);
+    console.log(`[SCRAPE] attempt ${attempt}/2 trên ${page.url()}`);
 
     // HueLMS thường render dữ liệu sau vài giây. Chờ ngắn để tránh hết phiên.
     try {
@@ -527,7 +539,7 @@ async function scrapeProgress(page, username, password, progressUrl) {
         return t.includes('kỹ thuật lái xe') || t.includes('ky thuat lai xe') ||
           t.includes('pháp luật giao thông') || t.includes('phap luat giao thong') ||
           t.includes('mô phỏng') || t.includes('mo phong');
-      }, { timeout: 4500 });
+      }, { timeout: FAST_RENDER_TIMEOUT });
     } catch (_) { }
 
     if (/\/user\/login/i.test(page.url())) {
@@ -639,14 +651,14 @@ async function scrapeProgress(page, username, password, progressUrl) {
     // Tuyệt đối không reload trang logout. Lần kế tiếp ensureProgressSession sẽ đăng nhập lại.
     if (/\/user\/login/i.test(page.url())) {
       console.log('[SCRAPE] Đang ở trang login, không reload.');
-    } else if (attempt < 3) {
+    } else if (attempt < 2) {
       // Chỉ reload khi phiên vẫn còn trên trang chi tiết.
       console.log('[SCRAPE] Phiên vẫn còn, reload nhanh trang tiến độ để thử lại.');
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => { });
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => { });
     }
   }
 
-  throw new Error('Đọc tiến độ chưa đầy đủ sau 3 lần và đã thử khôi phục phiên. Không ghi đè Google Sheets.');
+  throw new Error('Đọc tiến độ chưa đầy đủ sau 2 lần tối ưu. Không ghi đè Google Sheets.');
 }
 
 // ============================================================
@@ -841,109 +853,75 @@ async function runJob(job) {
 
   try {
     if (!DEFAULT_PASSWORD) {
-      throw new Error(
-        'Thiếu HUELMS_DEFAULT_PASSWORD.'
-      );
+      throw new Error('Thiếu HUELMS_DEFAULT_PASSWORD.');
     }
 
-    console.log(
-      `[JOB] Bắt đầu job ${job.id}`
-    );
+    console.log(`[JOB] Bắt đầu job ${job.id}`);
+    console.log(`[JOB] V8 Fast - ${job.students.length} học viên, concurrency=${MAX_CONCURRENCY}`);
 
-    browser =
-      await chromium.launch({
-        headless: true,
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-renderer-backgrounding'
+      ]
+    });
 
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-gpu'
-        ]
-      });
+    job.status = 'running';
+    let nextIndex = 0;
 
-    job.status =
-      'running';
+    async function worker(workerNo) {
+      while (true) {
+        const index = nextIndex++;
+        if (index >= job.students.length) return;
 
-    for (
-      let i = 0;
-      i <
-      job.students.length;
-      i++
-    ) {
-      console.log(
-        `[JOB] Xử lý ${i + 1
-        }/${job.students.length}`
-      );
+        const student = job.students[index];
+        console.log(`[JOB][W${workerNo}] Xử lý ${index + 1}/${job.students.length}`);
 
-      const result =
-        await syncStudent(
-          browser,
-          job.students[i]
+        const startedAt = Date.now();
+        const result = await syncStudent(browser, student);
+
+        try {
+          await callback(job.callbackUrl, job.id, result);
+        } catch (error) {
+          console.error(`[CALLBACK][W${workerNo}] Lỗi:`, error.message);
+        }
+
+        job.processed += 1;
+        if (result.error) job.errors += 1;
+
+        const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+        console.log(
+          `[JOB][W${workerNo}] Xong ${index + 1}/${job.students.length} trong ${seconds}s | ` +
+          `tổng tiến độ ${job.processed}/${job.total}, lỗi=${job.errors}`
         );
 
-      try {
-        await callback(
-          job.callbackUrl,
-          job.id,
-          result
-        );
-      } catch (error) {
-        console.error(
-          '[CALLBACK] Lỗi:',
-          error.message
-        );
-      }
-
-      job.processed =
-        i + 1;
-
-      if (result.error) {
-        job.errors += 1;
-      }
-
-      console.log(
-        `[JOB] Tiến độ: ${job.processed}/${job.total}, lỗi: ${job.errors}`
-      );
-
-      if (
-        i <
-        job.students.length - 1
-      ) {
-        await sleep(
-          job.delayMs
-        );
+        // Khoảng nghỉ rất ngắn để tránh dồn request vào HueLMS.
+        if (job.delayMs > 0) await sleep(job.delayMs);
       }
     }
 
-    job.status =
-      'done';
-
-    console.log(
-      `[JOB] Hoàn thành job ${job.id}`
+    const workerCount = Math.min(MAX_CONCURRENCY, job.students.length);
+    await Promise.all(
+      Array.from({ length: workerCount }, (_, i) => worker(i + 1))
     );
+
+    job.status = 'done';
+    console.log(`[JOB] Hoàn thành job ${job.id}`);
   } catch (error) {
-    console.error(
-      `[JOB] Lỗi:`,
-      error.stack ||
-      error.message
-    );
-
-    job.status =
-      'failed';
-
-    job.error =
-      error.message ||
-      String(error);
+    console.error('[JOB] Lỗi:', error.stack || error.message);
+    job.status = 'failed';
+    job.error = error.message || String(error);
   } finally {
     if (browser) {
-      await browser
-        .close()
-        .catch(() => { });
+      await browser.close().catch(() => { });
     }
-
-    job.finishedAt =
-      new Date().toISOString();
+    job.finishedAt = new Date().toISOString();
   }
 }
 
@@ -955,7 +933,8 @@ app.get('/', (req, res) => {
   res.json({
     ok: true,
     service:
-      'huelms-sync'
+      'huelms-sync',
+    version: 'v8-fast'
   });
 });
 
@@ -964,6 +943,7 @@ app.get('/health', (req, res) => {
     ok: true,
     service:
       'huelms-sync',
+    version: 'v8-fast',
     time:
       new Date().toISOString()
   });
@@ -1020,17 +1000,10 @@ app.post('/jobs', (req, res) => {
     const id =
       crypto.randomUUID();
 
-    const delayMs =
-      Math.max(
-        1200,
-        Math.min(
-          5000,
-          Number(
-            req.body.delayMs ||
-            1800
-          )
-        )
-      );
+    const requestedDelay = Number(req.body.delayMs);
+    const delayMs = Number.isFinite(requestedDelay)
+      ? Math.max(0, Math.min(1000, requestedDelay))
+      : 150;
 
     const job = {
       id,
@@ -1169,6 +1142,8 @@ app.listen(
     console.log(
       `HueLMS URL: ${BASE_URL}`
     );
+
+    console.log(`V8 Fast: MAX_CONCURRENCY=${MAX_CONCURRENCY}, FAST_RENDER_TIMEOUT=${FAST_RENDER_TIMEOUT}ms`);
 
     console.log(
       'THEORY_SYNC_SECRET:',
