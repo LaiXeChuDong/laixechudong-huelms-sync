@@ -37,6 +37,13 @@ const FAST_RENDER_TIMEOUT = Math.max(
   Math.min(8000, Number(process.env.FAST_RENDER_TIMEOUT || 3500))
 );
 
+// V9.1: chờ riêng cho bước HueLMS tự chuyển /student/ep -> /student/ep/{ID}.
+// Trên máy local có thể render nhanh nhưng redirect HueLMS vẫn mất vài giây.
+const PROGRESS_REDIRECT_TIMEOUT = Math.max(
+  5000,
+  Math.min(30000, Number(process.env.PROGRESS_REDIRECT_TIMEOUT || 15000))
+);
+
 const jobs = new Map();
 
 // ============================================================
@@ -125,11 +132,92 @@ async function firstVisible(page, selectors) {
   return null;
 }
 
+
+// ============================================================
+// V9.2 - BẮT ID TRANG TIẾN ĐỘ NGAY TRÊN NETWORK/NAVIGATION
+// ============================================================
+
+function initProgressTracker(page) {
+  if (page.__progressTracker) {
+    return page.__progressTracker;
+  }
+
+  const tracker = {
+    id: '',
+    url: '',
+    source: '',
+    capturedAt: 0
+  };
+
+  const capture = (value, source) => {
+    const url = String(value || '');
+    const match = url.match(/\/student\/ep\/(\d+)/);
+    if (!match) return;
+
+    const id = match[1];
+    const detailUrl = `${BASE_URL}/student/ep/${id}`;
+
+    if (tracker.id !== id) {
+      tracker.id = id;
+      tracker.url = detailUrl;
+      tracker.source = source;
+      tracker.capturedAt = Date.now();
+      console.log(`[PROGRESS][CAPTURE] Bắt được ID ${id} từ ${source}: ${url}`);
+    }
+  };
+
+  page.on('framenavigated', frame => {
+    if (frame === page.mainFrame()) {
+      capture(frame.url(), 'framenavigated');
+    }
+  });
+
+  page.on('request', request => {
+    capture(request.url(), 'request');
+  });
+
+  page.on('response', response => {
+    capture(response.url(), 'response');
+  });
+
+  tracker.capture = capture;
+  page.__progressTracker = tracker;
+  capture(page.url(), 'current-url');
+
+  return tracker;
+}
+
+function getTrackedProgressUrl(page) {
+  const tracker = initProgressTracker(page);
+  if (tracker.url) return tracker.url;
+
+  const match = String(page.url() || '').match(/\/student\/ep\/(\d+)/);
+  if (match) {
+    tracker.capture(page.url(), 'current-url');
+    return tracker.url;
+  }
+
+  return '';
+}
+
+async function waitForCapturedProgressUrl(page, timeoutMs) {
+  const started = Date.now();
+
+  while (Date.now() - started < timeoutMs) {
+    const tracked = getTrackedProgressUrl(page);
+    if (tracked) return tracked;
+    await page.waitForTimeout(100);
+  }
+
+  return getTrackedProgressUrl(page);
+}
+
 // ============================================================
 // LOGIN
 // ============================================================
 
 async function login(page, username, password) {
+  initProgressTracker(page);
   const masked = maskUsername(username);
 
   console.log(
@@ -370,29 +458,13 @@ async function login(page, username, password) {
 // FIND /student/ep/{ID}
 // ============================================================
 
-async function openProgressPage(page) {
-  console.log('[PROGRESS] Tìm trang chi tiết tiến độ...');
-  console.log('[PROGRESS] URL hiện tại:', page.url());
+async function waitForDetailedProgressUrl(page, timeoutMs) {
+  // V9.2: không chỉ nhìn page.url(). HueLMS có thể đi qua /student/ep/{ID}
+  // rất nhanh rồi logout, nên ID được giữ lại bởi progress tracker.
+  return await waitForCapturedProgressUrl(page, timeoutMs);
+}
 
-  if (/\/student\/ep\/\d+\/?$/.test(page.url())) {
-    console.log('[PROGRESS] Đã ở đúng trang chi tiết, giữ nguyên phiên:', page.url());
-    return page.url();
-  }
-
-  // HueLMS thường tự chuyển /student/ep -> /student/ep/{ID}.
-  // Chỉ chờ ngắn vì phiên đăng nhập của hệ thống khá ngắn.
-  try {
-    await page.waitForURL(
-      url => /\/student\/ep\/\d+\/?$/.test(url.toString()),
-      { timeout: 3500 }
-    );
-  } catch (_) { }
-
-  if (/\/student\/ep\/\d+\/?$/.test(page.url())) {
-    console.log('[PROGRESS] HueLMS tự redirect thành công:', page.url());
-    return page.url();
-  }
-
+async function findProgressIdFromPage(page) {
   let epId = null;
 
   try {
@@ -431,35 +503,91 @@ async function openProgressPage(page) {
     } catch (_) { }
   }
 
-  const currentMatch = page.url().match(/\/student\/ep\/(\d+)/);
-  if (currentMatch) {
-    console.log('[PROGRESS] URL đã tự chuyển trong lúc dò:', page.url());
-    return page.url();
+  return epId;
+}
+
+async function openProgressPage(page, username, password) {
+  initProgressTracker(page);
+
+  console.log('[PROGRESS] V9.2 - bắt ID từ navigation/network...');
+  console.log('[PROGRESS] URL hiện tại:', page.url());
+
+  let tracked = getTrackedProgressUrl(page);
+  if (tracked) {
+    console.log('[PROGRESS] Đã có ID được capture:', tracked);
+    if (page.url() !== tracked) {
+      await page.goto(tracked, {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000
+      }).catch(() => { });
+    }
+    if (/\/student\/ep\/\d+\/?$/.test(page.url())) {
+      return tracked;
+    }
   }
 
-  if (!epId) {
-    throw new Error(
-      'Đăng nhập thành công nhưng chưa xác định được ID trang tiến độ. URL hiện tại: ' +
-      page.url()
-    );
+  // Cho HueLMS một khoảng ngắn để tự chuyển. Tracker sẽ bắt ID kể cả URL chỉ xuất hiện thoáng qua.
+  console.log(`[PROGRESS] Chờ capture ID tối đa ${PROGRESS_REDIRECT_TIMEOUT}ms...`);
+  tracked = await waitForCapturedProgressUrl(page, PROGRESS_REDIRECT_TIMEOUT);
+
+  if (tracked) {
+    console.log('[PROGRESS] Capture được URL chi tiết:', tracked);
+    if (page.url() !== tracked) {
+      console.log('[PROGRESS] Mở lại URL đã capture để scrape:', tracked);
+      await page.goto(tracked, {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000
+      }).catch(() => { });
+    }
+
+    if (/\/student\/ep\/\d+\/?$/.test(page.url())) {
+      console.log('[PROGRESS] Trang chi tiết sẵn sàng:', page.url());
+      return tracked;
+    }
   }
 
-  const target = `${BASE_URL}/student/ep/${epId}`;
-  console.log('[PROGRESS] Mở trực tiếp trang chi tiết:', target);
+  // Nếu bị logout trước khi capture được ID, đăng nhập lại một lần.
+  if (/\/user\/login/i.test(page.url())) {
+    console.log('[PROGRESS] Chưa capture được ID và HueLMS đã logout. Đăng nhập lại 1 lần...');
+    await login(page, username, password);
 
-  await page.goto(target, {
-    waitUntil: 'domcontentloaded',
-    timeout: 20000
-  });
-
-  if (!/\/student\/ep\/\d+\/?$/.test(page.url())) {
-    throw new Error(
-      'Không vào được trang chi tiết tiến độ. URL hiện tại: ' + page.url()
-    );
+    tracked = await waitForCapturedProgressUrl(page, Math.min(PROGRESS_REDIRECT_TIMEOUT, 10000));
+    if (tracked) {
+      console.log('[PROGRESS] Capture ID sau đăng nhập lại:', tracked);
+      if (page.url() !== tracked) {
+        await page.goto(tracked, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000
+        }).catch(() => { });
+      }
+      if (/\/student\/ep\/\d+\/?$/.test(page.url())) {
+        return tracked;
+      }
+    }
   }
 
-  console.log('[PROGRESS] Vào trang chi tiết thành công:', page.url());
-  return page.url();
+  // Fallback cũ: tìm ID trong HTML/href/performance resource.
+  const epId = await findProgressIdFromPage(page);
+  if (epId) {
+    const target = `${BASE_URL}/student/ep/${epId}`;
+    console.log('[PROGRESS] Fallback tìm thấy ID, mở trực tiếp:', target);
+    initProgressTracker(page).capture(target, 'fallback');
+
+    await page.goto(target, {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000
+    });
+
+    if (/\/student\/ep\/\d+\/?$/.test(page.url())) {
+      return target;
+    }
+  }
+
+  const tracker = initProgressTracker(page);
+  throw new Error(
+    'Đăng nhập thành công nhưng chưa xác định được ID trang tiến độ. ' +
+    `URL hiện tại: ${page.url()} | captured=${tracker.url || 'none'}`
+  );
 }
 
 async function ensureProgressSession(page, username, password, progressUrl) {
@@ -703,6 +831,8 @@ async function syncStudent(
   const page =
     await context.newPage();
 
+  initProgressTracker(page);
+
   page.setDefaultTimeout(
     20000
   );
@@ -721,7 +851,9 @@ async function syncStudent(
     );
 
     const progressUrl = await openProgressPage(
-      page
+      page,
+      username,
+      DEFAULT_PASSWORD
     );
 
     const progress =
@@ -857,7 +989,7 @@ async function runJob(job) {
     }
 
     console.log(`[JOB] Bắt đầu job ${job.id}`);
-    console.log(`[JOB] V8 Fast - ${job.students.length} học viên, concurrency=${MAX_CONCURRENCY}`);
+    console.log(`[JOB] V9.2 Local Capture - ${job.students.length} học viên, concurrency=${MAX_CONCURRENCY}`);
 
     browser = await chromium.launch({
       headless: true,
@@ -934,7 +1066,7 @@ app.get('/', (req, res) => {
     ok: true,
     service:
       'huelms-sync',
-    version: 'v8-fast'
+    version: 'v9.2-local-capture'
   });
 });
 
@@ -943,7 +1075,7 @@ app.get('/health', (req, res) => {
     ok: true,
     service:
       'huelms-sync',
-    version: 'v8-fast',
+    version: 'v9.2-local-capture',
     time:
       new Date().toISOString()
   });
@@ -1143,7 +1275,7 @@ app.listen(
       `HueLMS URL: ${BASE_URL}`
     );
 
-    console.log(`V8 Fast: MAX_CONCURRENCY=${MAX_CONCURRENCY}, FAST_RENDER_TIMEOUT=${FAST_RENDER_TIMEOUT}ms`);
+    console.log(`V9.2 Local Capture: MAX_CONCURRENCY=${MAX_CONCURRENCY}, FAST_RENDER_TIMEOUT=${FAST_RENDER_TIMEOUT}ms, PROGRESS_REDIRECT_TIMEOUT=${PROGRESS_REDIRECT_TIMEOUT}ms`);
 
     console.log(
       'THEORY_SYNC_SECRET:',
