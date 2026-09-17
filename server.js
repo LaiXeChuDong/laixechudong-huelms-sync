@@ -362,15 +362,13 @@ async function openProgressPage(page) {
   console.log('[PROGRESS] Tìm trang chi tiết tiến độ...');
   console.log('[PROGRESS] URL hiện tại:', page.url());
 
-  // Nếu HueLMS đã tự chuyển đúng sang /student/ep/{ID} thì KHÔNG goto lại.
-  // Việc goto lại trang chi tiết có thể làm phiên HueLMS ngắn đi hoặc bị logout.
   if (/\/student\/ep\/\d+\/?$/.test(page.url())) {
     console.log('[PROGRESS] Đã ở đúng trang chi tiết, giữ nguyên phiên:', page.url());
-    return;
+    return page.url();
   }
 
-  // HueLMS thường chuyển /student/ep -> /student/ep/{ID} bằng JavaScript.
-  // Chỉ chờ ngắn để tránh giữ phiên quá lâu.
+  // HueLMS thường tự chuyển /student/ep -> /student/ep/{ID}.
+  // Chỉ chờ ngắn vì phiên đăng nhập của hệ thống khá ngắn.
   try {
     await page.waitForURL(
       url => /\/student\/ep\/\d+\/?$/.test(url.toString()),
@@ -380,12 +378,11 @@ async function openProgressPage(page) {
 
   if (/\/student\/ep\/\d+\/?$/.test(page.url())) {
     console.log('[PROGRESS] HueLMS tự redirect thành công:', page.url());
-    return;
+    return page.url();
   }
 
   let epId = null;
 
-  // Tìm ID trong HTML/link/resource/storage nếu HueLMS chưa tự đổi URL.
   try {
     const html = await page.content();
     const match = html.match(/\/student\/ep\/(\d+)/);
@@ -422,30 +419,10 @@ async function openProgressPage(page) {
     } catch (_) { }
   }
 
-  if (!epId) {
-    try {
-      const storage = await page.evaluate(() => {
-        const result = {};
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          result['local:' + key] = localStorage.getItem(key);
-        }
-        for (let i = 0; i < sessionStorage.length; i++) {
-          const key = sessionStorage.key(i);
-          result['session:' + key] = sessionStorage.getItem(key);
-        }
-        return result;
-      });
-      const match = JSON.stringify(storage).match(/\/student\/ep\/(\d+)/);
-      if (match) epId = match[1];
-    } catch (_) { }
-  }
-
-  // Kiểm tra lần cuối vì URL có thể đổi trong lúc đọc HTML/storage.
   const currentMatch = page.url().match(/\/student\/ep\/(\d+)/);
   if (currentMatch) {
     console.log('[PROGRESS] URL đã tự chuyển trong lúc dò:', page.url());
-    return;
+    return page.url();
   }
 
   if (!epId) {
@@ -456,7 +433,7 @@ async function openProgressPage(page) {
   }
 
   const target = `${BASE_URL}/student/ep/${epId}`;
-  console.log('[PROGRESS] Chỉ khi chưa tự redirect mới mở trực tiếp:', target);
+  console.log('[PROGRESS] Mở trực tiếp trang chi tiết:', target);
 
   await page.goto(target, {
     waitUntil: 'domcontentloaded',
@@ -470,27 +447,49 @@ async function openProgressPage(page) {
   }
 
   console.log('[PROGRESS] Vào trang chi tiết thành công:', page.url());
+  return page.url();
+}
+
+async function ensureProgressSession(page, username, password, progressUrl) {
+  const loggedOut = /\/user\/login/i.test(page.url());
+
+  if (loggedOut) {
+    console.log('[SESSION] Phát hiện HueLMS đã logout. Đăng nhập lại...');
+    await login(page, username, password);
+  }
+
+  if (progressUrl && page.url() !== progressUrl) {
+    console.log('[SESSION] Khôi phục trang tiến độ:', progressUrl);
+    await page.goto(progressUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000
+    });
+  }
+
+  if (/\/user\/login/i.test(page.url())) {
+    throw new Error('Không khôi phục được phiên HueLMS sau khi đăng nhập lại.');
+  }
+
+  if (!/\/student\/ep\/\d+\/?$/.test(page.url())) {
+    throw new Error('Phiên HueLMS còn hiệu lực nhưng chưa ở trang tiến độ chi tiết. URL: ' + page.url());
+  }
 }
 
 // ============================================================
 // SCRAPE PROGRESS
 // ============================================================
 
-async function scrapeProgress(page) {
+async function scrapeProgress(page, username, password, progressUrl) {
   console.log('[SCRAPE] Đọc tiến độ HueLMS...');
   console.log('[SCRAPE] URL:', page.url());
 
-  if (/\/user\/login/i.test(page.url())) {
-    throw new Error('HueLMS đã logout trước khi đọc được tiến độ.');
-  }
-
-  const scores = { ethics: 0, drivingTechnique: 0, vehicleStructure: 0, trafficLaw: 0, pl1: 0, pl2: 0, pl3: 0, simulation: 0 };
-  const passed = { ethics: false, drivingTechnique: false, vehicleStructure: false, trafficLaw: false, pl1: false, pl2: false, pl3: false, simulation: false };
-  const found = new Set();
+  const requiredKeys = [
+    'ethics', 'drivingTechnique', 'vehicleStructure', 'trafficLaw',
+    'pl1', 'pl2', 'pl3', 'simulation'
+  ];
 
   function identifyKey(label) {
     const name = norm(label);
-    // Môn con phải nhận diện trước môn cha để tránh text của hàng cha chứa cả các hàng con.
     if (name.includes('phan 1') || /(^|\s)pl1(\s|$)/.test(name)) return 'pl1';
     if (name.includes('phan 2') || /(^|\s)pl2(\s|$)/.test(name)) return 'pl2';
     if (name.includes('phan 3') || /(^|\s)pl3(\s|$)/.test(name)) return 'pl3';
@@ -502,34 +501,41 @@ async function scrapeProgress(page) {
     return null;
   }
 
-  function record(key, percent, text) {
-    const n = Number(percent);
-    if (!key || !Number.isFinite(n) || n < 0 || n > 100) return false;
-    scores[key] = n;
-    passed[key] = /(^|\s)dat($|\s)/.test(norm(text));
-    found.add(key);
-    console.log(`[SCRAPE] ${key} = ${n}% | đạt=${passed[key]}`);
-    return true;
-  }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await ensureProgressSession(page, username, password, progressUrl);
 
-  // HueLMS có thể render bảng muộn. Thử tối đa 3 vòng; vòng sau reload trang chi tiết.
-  for (let attempt = 1; attempt <= 3 && found.size < 8; attempt++) {
-    if (attempt > 1) {
-      console.log(`[SCRAPE] Thử lại lần ${attempt}/3...`);
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => { });
+    const scores = { ethics: 0, drivingTechnique: 0, vehicleStructure: 0, trafficLaw: 0, pl1: 0, pl2: 0, pl3: 0, simulation: 0 };
+    const passed = { ethics: false, drivingTechnique: false, vehicleStructure: false, trafficLaw: false, pl1: false, pl2: false, pl3: false, simulation: false };
+    const found = new Set();
+
+    function record(key, percent, text) {
+      const n = Number(percent);
+      if (!key || found.has(key) || !Number.isFinite(n) || n < 0 || n > 100) return false;
+      scores[key] = n;
+      passed[key] = /(^|\s)dat($|\s)/.test(norm(text));
+      found.add(key);
+      console.log(`[SCRAPE] ${key} = ${n}% | đạt=${passed[key]}`);
+      return true;
     }
 
-    await page.waitForTimeout(attempt === 1 ? 2500 : 4000);
+    console.log(`[SCRAPE] attempt ${attempt}/3 trên ${page.url()}`);
 
-    // Chờ một trong các nhãn thật của bảng xuất hiện trong DOM hiển thị.
-    await page.waitForFunction(() => {
-      const t = (document.body && document.body.innerText || '').toLowerCase();
-      return t.includes('kỹ thuật lái xe') || t.includes('ky thuat lai xe') ||
-        t.includes('pháp luật giao thông') || t.includes('phap luat giao thong') ||
-        t.includes('mô phỏng') || t.includes('mo phong');
-    }, { timeout: 12000 }).catch(() => { });
+    // HueLMS thường render dữ liệu sau vài giây. Chờ ngắn để tránh hết phiên.
+    try {
+      await page.waitForFunction(() => {
+        const t = (document.body && (document.body.innerText || document.body.textContent) || '').toLowerCase();
+        return t.includes('kỹ thuật lái xe') || t.includes('ky thuat lai xe') ||
+          t.includes('pháp luật giao thông') || t.includes('phap luat giao thong') ||
+          t.includes('mô phỏng') || t.includes('mo phong');
+      }, { timeout: 4500 });
+    } catch (_) { }
 
-    // Cách 1: đọc mọi TR ở tất cả frame.
+    if (/\/user\/login/i.test(page.url())) {
+      console.log('[SCRAPE] Phiên hết trong lúc chờ dữ liệu, sẽ đăng nhập lại.');
+      continue;
+    }
+
+    // 1) Đọc các hàng bảng nếu có.
     for (const frame of page.frames()) {
       let rows = [];
       try {
@@ -539,7 +545,8 @@ async function scrapeProgress(page) {
         })).filter(x => x.text));
       } catch (_) { }
 
-      console.log(`[SCRAPE] attempt=${attempt} frame=${frame.url()} rows=${rows.length}`);
+      console.log(`[SCRAPE] frame=${frame.url()} rows=${rows.length}`);
+
       for (const row of rows) {
         const key = identifyKey(row.text);
         if (!key || found.has(key)) continue;
@@ -553,20 +560,16 @@ async function scrapeProgress(page) {
       }
     }
 
-    // Cách 2: không phụ thuộc table/tr. Tìm các element hiển thị có dấu % rồi đi ngược
-    // lên ancestor gần nhất; cách này hoạt động cả khi HueLMS đổi table thành div/grid.
+    // 2) Fallback DOM block nhỏ có tên môn + phần trăm.
     if (found.size < 8) {
       for (const frame of page.frames()) {
         let blocks = [];
         try {
           blocks = await frame.evaluate(() => {
             const out = [];
-            const all = Array.from(document.querySelectorAll('body *'));
-            for (const el of all) {
-              const own = (el.innerText || '').replace(/\s+/g, ' ').trim();
-              if (!own || !/\d{1,3}(?:[.,]\d+)?\s*%/.test(own)) continue;
-              // Bỏ container quá lớn; ưu tiên block nhỏ chứa tên môn + phần trăm.
-              if (own.length > 700) continue;
+            for (const el of Array.from(document.querySelectorAll('body *'))) {
+              const own = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              if (!own || !/\d{1,3}(?:[.,]\d+)?\s*%/.test(own) || own.length > 700) continue;
               const r = el.getBoundingClientRect();
               if (r.width <= 0 || r.height <= 0) continue;
               out.push(own);
@@ -574,6 +577,7 @@ async function scrapeProgress(page) {
             return Array.from(new Set(out)).sort((a, b) => a.length - b.length).slice(0, 300);
           });
         } catch (_) { }
+
         for (const text of blocks) {
           const key = identifyKey(text);
           if (!key || found.has(key)) continue;
@@ -583,72 +587,66 @@ async function scrapeProgress(page) {
       }
     }
 
-    // Cách 3: body.innerText fallback. Cắt từ nhãn hiện tại đến nhãn môn kế tiếp,
-    // rồi lấy % đầu tiên. Không dùng đoạn greedy nên 76.6% không thể thành 6%.
+    // 3) Fallback toàn bộ body text. Dùng regex riêng cho từng môn để tránh nhầm hàng cha/con.
     if (found.size < 8) {
       let pageText = '';
       for (const frame of page.frames()) {
         try {
-          const t = await frame.locator('body').innerText({ timeout: 3000 });
+          const t = await frame.evaluate(() => document.body ? (document.body.innerText || document.body.textContent || '') : '');
           if (t) pageText += '\n' + t;
-        } catch (_) {
-          try {
-            const t = await frame.evaluate(() => document.body ? (document.body.innerText || document.body.textContent || '') : '');
-            if (t) pageText += '\n' + t;
-          } catch (_) { }
-        }
+        } catch (_) { }
       }
-      console.log('[SCRAPE] Độ dài body.innerText:', pageText.length);
-      const compact = norm(pageText);
-      const defs = [
-        ['ethics', ['dao duc nguoi lai xe', 'dao duc']],
-        ['drivingTechnique', ['ky thuat lai xe o to', 'ky thuat lai xe']],
-        ['vehicleStructure', ['cau tao sua chua']],
-        ['trafficLaw', ['phap luat giao thong duong bo', 'phap luat gtdb']],
-        ['pl1', ['phan 1.', 'phan 1 ', 'pl1']],
-        ['pl2', ['phan 2.', 'phan 2 ', 'pl2']],
-        ['pl3', ['phan 3.', 'phan 3 ', 'pl3']],
-        ['simulation', ['mo phong cac tinh huong giao thong', 'mo phong']]
+
+      console.log('[SCRAPE] Độ dài body text:', pageText.length);
+      const text = pageText.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ');
+
+      const rules = [
+        ['ethics', /Đạo đức[^%]{0,350}?([0-9]{1,3}(?:[.,][0-9]+)?)\s*%/i],
+        ['drivingTechnique', /Kỹ thuật lái xe[^%]{0,250}?([0-9]{1,3}(?:[.,][0-9]+)?)\s*%/i],
+        ['vehicleStructure', /Cấu tạo sửa chữa[^%]{0,250}?([0-9]{1,3}(?:[.,][0-9]+)?)\s*%/i],
+        ['trafficLaw', /Pháp luật giao thông đường bộ[^%]{0,250}?([0-9]{1,3}(?:[.,][0-9]+)?)\s*%/i],
+        ['pl1', /Phần\s*1[^%]{0,250}?([0-9]{1,3}(?:[.,][0-9]+)?)\s*%/i],
+        ['pl2', /Phần\s*2[^%]{0,250}?([0-9]{1,3}(?:[.,][0-9]+)?)\s*%/i],
+        ['pl3', /Phần\s*3[^%]{0,250}?([0-9]{1,3}(?:[.,][0-9]+)?)\s*%/i],
+        ['simulation', /Mô phỏng các tình huống giao thông[^%]{0,250}?([0-9]{1,3}(?:[.,][0-9]+)?)\s*%/i]
       ];
-      const positions = [];
-      for (const [key, labels] of defs) {
-        for (const label of labels) {
-          const i = compact.indexOf(label);
-          if (i >= 0) { positions.push({ key, i, label }); break; }
-        }
-      }
-      positions.sort((a, b) => a.i - b.i);
-      for (let i = 0; i < positions.length; i++) {
-        const cur = positions[i];
-        if (found.has(cur.key)) continue;
-        const end = i + 1 < positions.length ? positions[i + 1].i : Math.min(compact.length, cur.i + 500);
-        const segment = compact.slice(cur.i, Math.max(cur.i + 120, end));
-        const p = parsePercent(segment);
-        if (p !== null) record(cur.key, p, segment);
+
+      for (const [key, re] of rules) {
+        if (found.has(key)) continue;
+        const m = text.match(re);
+        if (m) record(key, Number(m[1].replace(',', '.')), m[0]);
       }
     }
 
     console.log(`[SCRAPE] Sau attempt ${attempt}: ${found.size}/8`);
+
+    if (found.size === 8) {
+      const anyProgress = Object.values(scores).some(v => Number(v) > 0);
+      const completed = [passed.ethics, passed.drivingTechnique, passed.vehicleStructure, passed.trafficLaw, passed.simulation].every(Boolean);
+      const status = completed ? 'Hoàn thành' : (anyProgress ? 'Đang học' : 'Chưa học');
+      const result = {
+        scores, passed, completed, status, sourceUrl: page.url(), syncedAt: new Date().toISOString(),
+        ethics: scores.ethics, drivingTechnique: scores.drivingTechnique, vehicleStructure: scores.vehicleStructure,
+        trafficLaw: scores.trafficLaw, pl1: scores.pl1, pl2: scores.pl2, pl3: scores.pl3, simulation: scores.simulation
+      };
+      console.log('[SCRAPE] Kết quả cuối:', JSON.stringify(result));
+      return result;
+    }
+
+    const missing = requiredKeys.filter(k => !found.has(k));
+    console.log('[SCRAPE] Còn thiếu:', missing.join(', '));
+
+    // Tuyệt đối không reload trang logout. Lần kế tiếp ensureProgressSession sẽ đăng nhập lại.
+    if (/\/user\/login/i.test(page.url())) {
+      console.log('[SCRAPE] Đang ở trang login, không reload.');
+    } else if (attempt < 3) {
+      // Chỉ reload khi phiên vẫn còn trên trang chi tiết.
+      console.log('[SCRAPE] Phiên vẫn còn, reload nhanh trang tiến độ để thử lại.');
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => { });
+    }
   }
 
-  const requiredKeys = ['ethics', 'drivingTechnique', 'vehicleStructure', 'trafficLaw', 'pl1', 'pl2', 'pl3', 'simulation'];
-  const missing = requiredKeys.filter(k => !found.has(k));
-  console.log('[SCRAPE] Số mục đọc được:', found.size, '/8');
-
-  if (missing.length) {
-    throw new Error('Đọc tiến độ chưa đầy đủ, còn thiếu: ' + missing.join(', ') + '. Không ghi đè Google Sheets.');
-  }
-
-  const anyProgress = Object.values(scores).some(v => Number(v) > 0);
-  const completed = [passed.ethics, passed.drivingTechnique, passed.vehicleStructure, passed.trafficLaw, passed.simulation].every(Boolean);
-  const status = completed ? 'Hoàn thành' : (anyProgress ? 'Đang học' : 'Chưa học');
-  const result = {
-    scores, passed, completed, status, sourceUrl: page.url(), syncedAt: new Date().toISOString(),
-    ethics: scores.ethics, drivingTechnique: scores.drivingTechnique, vehicleStructure: scores.vehicleStructure,
-    trafficLaw: scores.trafficLaw, pl1: scores.pl1, pl2: scores.pl2, pl3: scores.pl3, simulation: scores.simulation
-  };
-  console.log('[SCRAPE] Kết quả cuối:', JSON.stringify(result));
-  return result;
+  throw new Error('Đọc tiến độ chưa đầy đủ sau 3 lần và đã thử khôi phục phiên. Không ghi đè Google Sheets.');
 }
 
 // ============================================================
@@ -710,13 +708,16 @@ async function syncStudent(
       DEFAULT_PASSWORD
     );
 
-    await openProgressPage(
+    const progressUrl = await openProgressPage(
       page
     );
 
     const progress =
       await scrapeProgress(
-        page
+        page,
+        username,
+        DEFAULT_PASSWORD,
+        progressUrl
       );
 
     console.log(
